@@ -1,192 +1,76 @@
-# @240xu/dsh-session-lazy-view
+# PTC 磁盘历史：原日志按需读取
 
-> **怎么打开**：安装后访问 **`http://<dsh-web-地址>/lazyview`** 即是独立面板页；
-> DSH 宿主侧边栏没有本插件入口是**有意设计**（纯只读工具，不污染主界面）。
-> 可选：若你另装了 dsh-devkit，**Ctrl+K** 命令面板里会有「打开」入口；没装也不影响本插件。
+本地实验版：`@local/dsh-ptc-disk-history@0.1.0-alpha.2`。实现说明及第三方来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-DSH web 插件：**会话惰性查看器**（纯只读）。列出 `~/.dsh/sessions` 下全部会话（只 stat 不解压），
-并可只解压任意会话文件的**最后 1–2 个 zstd 帧**快速查看最近发生的事件，不碰整份文件。
+**只保留原会话日志一份正文，不把展示原文拆成外置文件。** 本版本针对 `tool/ptc-dispatch` 中 `read` 子调用的大 `data.meta.lines`，在原生历史冷恢复和查询时保留有标识的预览；点击详情才从原日志精确定位物理帧并分页读取。
 
-不做删除、不做归档、不是 Trajectory 替代品；对 `~/.dsh/sessions` 零写入。
+**对模型上下文的影响**：官方 `deriveMessages()` 对 `tool/ptc-dispatch` 返回 `null`，PTC展示 metadata（包括 `meta.lines`）本来就不属于正常模型消息。本插件的普通历史观察只提供醒目标注的薄预览，不会把完整行数据自动注入模型；最终 `tool/result`、正式消息、工具参数与调用身份均保持完整。点击 GUI 详情只在浏览器按页展示，不进入模型上下文。新增 `ptc_history_read` 工具仅在 Agent 显式调用时把请求的那一页作为工具结果交给模型，每页限制 48 KiB，模型可以按返回游标继续读取；它不会自动补齐整份 metadata。原 `session_event_read` 看见的是预览，想恢复原始 PTC read 展示正文应使用该显式分页工具。
 
+## 已实现
 
-## 10 秒速查
+- 原生 AgentLoop resume、cold GUI/query、标题和单事件查询接入显式 presentation 模式；不是另开查看页后让原生仍全量恢复。
+- 大于 32 KiB 的 PTC read 行展示数据，在内存中只保留最多 4 KiB 的首尾预览和临时 token。原文仍完整保留在原 `.jsonl.zstd`。
+- 不使用自动水合 getter，普通 JSON 序列化不会读盘。
+- 详情为显式异步分页，单页 JSON 最多 64 KiB，超长 Unicode 行可用字符游标续读。浏览器只保留当前页和最多 100 个上一页游标，收起/卸载即清空并 abort。
+- 使用 Zstandard 真实帧结构，不按 magic 字节搜索；内存只保留轻量 seq/帧位置与摘要索引，不写索引 sidecar。
+- 官方 V4 行准入、序号、关系和 Session 校验继续执行；损坏/截断日志拒绝，错误不静默回退成高内存 eager。
+- 持久化默认 `open/read` 仍返回完整事件，供官方日志导出使用。写入前逐事件恢复完整 meta 并调用官方 catalog 编码，禁止把预览/token 写回日志。
+- 原生正常 append 保留旧压缩前缀字节；复制/分叉物化后，子日志拥有完整原文，不依赖父日志继续存在。
+- worker 最多保留一个 256 事件 ACK 批次；Host 确认接收后才扫描后续事件，避免worker全历史数组与跨线程完整复制。
+- 不同历史 presentation read 在 handle.read 边界串行，减少多个整日志快照同时解码的峰值；正常full API和写入API保持原生语义。
+- worker 有限额、队列和超时，使用 Cordis effect disposer 清理，无后台巡检/GC 循环。
+- 无会话删除钩子，不清理任何项目/工作区/共享目录。
 
-```sh
-dsh plugin --profile web add @240xu/dsh-session-lazy-view
-# 重启后直接访问 http://<dsh-web-地址>/lazyview
+## 验证证据
+
+当前 Windows ARM64 / Node 27 / DSH `0.2.2-rc.5`：
+
+```powershell
+$env:DSH_INSTALL_DIR='C:\softwares\node-arm64\node_modules\@deepseek-ai\dsh'
+node --test "test/*.test.js"
+node scripts/check.mjs
 ```
 
-- 纯只读：不删除、不归档、不写 `~/.dsh/sessions`
-- 不想逐个装：`dsh plugin --profile web add @240xu/dsh-plugin-hub`
-- 卸载：`dsh plugin --profile web remove @240xu/dsh-session-lazy-view`
+修复版完整回归：**92 项通过，0 失败**；覆盖真实官方 Cordis/Session/AgentRegistry/AgentLoop/query 隔离组合、worker ACK背压、并发 presentation 冷读取串行、按安装版动态native快照及分页界限。未发送模型请求。
 
-## 原理
+对报错中的 `session-6659c2b1-1028-49f6-9585-ebb9b9a01dc6` 做隔离冷扫描：77,083 个事件，worker 上限 192 MiB，主进程显式设为 1 GiB；扫描耗时 6,623 ms、进程 RSS 484.3 MiB、主线程 GC 后 heap 263.2 MiB；302 个 ACK 批次，单批最大 256。源日志 SHA-256 前后均为 `F0B35AF35FCDA6C5F790D71B31D16536DC75D0AE0D0DD6C8940F849F24F76E4D`。此前另一次扫描期间该会话仍在追加，scanner按设计拒绝混合不同revision的快照。
 
-`session.v3.jsonl.zstd` 是**连续多帧**的独立 zstd 帧（魔数 `0x28 B5 2F FD`）：
-帧 0 恰好一行 session header JSON；之后每帧一批 newline-delimited JSON 事件，
-最后一帧结束于 EOF。因此从文件尾部读一个窗口、扫帧魔数、只解压候选帧，
-即可拿到最近事件，成本与文件总大小无关（旧格式 `session.jsonl.zstd`
-为单帧，等效于解压整份，但同样走这条路径）。
+同一份 67,784,180 字节历史样本：20,813 个事件、1,169 个大展示 metadata（原始 `meta.lines` 合计 340,474,294 字节），28,487 ms 扫描；进程 RSS 485.2 MiB，主线程 GC 后 heap 212.5 MiB；82 个 ACK 批次、单批最大 256。源日志 SHA-256 前后均为 `65433ED92C4D311888B2FB874F965516964BFD67335FD504F37693C43ABA00F4`。两次测试都没有详情自动回读、日志写入或外置正文文件。
 
-## 安装
+以上为隔离新进程的单次读样本，不是当前 Host 总内存或硬上限；1 GiB 主堆是基准进程设置，worker仍限制为192 MiB。用户已在 alpha.2 冷启动后确认历史会话可正常打开；详情分页的实际点击展示尚未单独确认。
 
-零 npm 依赖（只用 `node:fs` / `node:zlib` / `node:path` / `node:url`；
-`@deepseek-ai/schemastery` 由 DSH profile 树自带，无需安装）。
+## 使用边界
 
-```bash
-# 方式 A（推荐）：DSH 官方插件命令（内部走 pnpm，正确登记 lockfile 与 bundles）
-dsh plugin --profile web add @240xu/dsh-session-lazy-view
+1. **必须冷启动接入。** 本 bundle 通过停用官方 JSONL/AgentLoop/query 三个 row、插入替代 provider；在正在运行的 Host 中 HMR 切换这些基础服务会影响所有会话。当前profile尚未启用修复版。
+2. 本地包声明 DSH `>=0.2.2-rc.5`，**不设最高版本**。每次Host激活时读取当前 DSH 与 persistence 包，要求版本一致；从当前安装动态生成隔离native适配代码到系统临时目录，检查类/方法布局，退出时清理临时代码。布局变化时fail closed。没有打包或复用0.2.2的静态二进制快照；每个新版本仍需做全套适配验证。
+3. **重点是历史冷恢复，不是所有 live 内存。** 新 run_code 结果仍由官方先发布完整 metadata，当前 live 生命周期中可能继续驻留；后续冷重载才使用薄视图。本版不靠事后巡检替换正在使用的事件。
+4. **首次冷打开仍需完整扫描/验证原日志。** 一个大 Zstd 物理帧需要从帧起点解压；默认单帧 64 MiB、单行 8 MiB，超限拒绝而不是自动扩大。旧日志样本约需 29 秒，worker 让主循环持续运行，但不是即时打开方案。
+5. **完整导出依然可能消耗较多内存。** 官方 ZIP/完整日志导出走普通 full storage API，数据完整，但不会享有 GUI preview 的内存特性。
+6. **GUI read row 是轻量回退。** 当前 DSH keyed slot 没有条件 fallback，插件覆盖 read 行以提供分页按钮；路径打开、状态、inspect、展开已有 content 保留，原生高亮和文件右键菜单未复用。浏览器行为已做 VM/React 桩测试，实际页面渲染尚未验收。
+7. **V0–V3 迁移沿用官方完整迁移。** 大旧版本日志不承诺同样内存收益；presentation 路径对撕裂尾部先拒绝，未把 crash repair 作为已优化场景。
+8. **索引/token 不落盘。** 原日志变化会校验修订；进程重启 token 重新生成。追加后首次详情读取可能重建轻量索引，遇到并发改写会受控拒绝并要求重试。
 
-# 方式 B：npm pack 直解（profile 是 pnpm workspace，不要在 profile 内直接 npm i ——
-# workspace 根的 link:/ 依赖会让 npm 报 EUNSUPPORTEDPROTOCOL）
-cd ~/.dsh/profiles/web/node_modules
-npm pack @240xu/dsh-session-lazy-view
-mkdir -p @240xu/dsh-session-lazy-view
-tar -xzf 240xu-dsh-session-lazy-view-*.tgz -C @240xu/dsh-session-lazy-view --strip-components=1
-# 然后把 "@240xu/dsh-session-lazy-view" 加进 profile package.json 的
-# dsh.profile.bundles 列表（lockfile/package-map 不一致时 pnpm install 会补齐）
+## 准备与安装
 
-# 方式 C：从源码拷贝（开发）
-git clone https://github.com/240xu/dsh-session-lazy-view && cp -r dsh-session-lazy-view ~/.dsh/profiles/web/node_modules/
+验证命令（每次拟适配新的 DSH 版本都运行）：
+
+```powershell
+$env:DSH_INSTALL_DIR='C:\softwares\node-arm64\node_modules\@deepseek-ai\dsh'
+node scripts/check.mjs
+node --test "test/*.test.js"
 ```
 
-然后在 DSH web profile 的 `cordis.patch.yml` 里挂载（写法与
-`dsh-archived-sessions` 完全一致）。若该文件已存在其它 `- insert:` 条目，
-把下面 `- id:` 两行并入现有列表即可：
+运行时快照由插件在Host启动时从该Host的安装生成到系统临时目录；退出Fiber时清理。源码包不携带特定DSH版本的官方native二进制副本。诊断脚本 `scripts/prepare-native.mjs` 也默认在系统临时目录生成检查快照。
 
-```yaml
-- insert:
-    - id: dsh-session-lazy-view
-      name: '@240xu/dsh-session-lazy-view'
-```
+部署修复版前完整退出 DSH Web/Desktop/headless，再通过官方插件管理器安装并启用本地bundle。完成冷启动后，工具read行出现“从原会话日志读取详情”分页按钮；正式GUI页面与会话切换需用新Host确认。
 
-重启 DSH web 实例后生效。
+本目录是本地链接源码；使用链接安装后应保留，不要在 Host 运行中修改它。
 
-## 端点
+## 读写和权限
 
-前缀 `/lazyview`（受与 archived-sessions 相同的 loopback / same-origin 信任门保护）：
+- 读取：原始会话压缩日志、安装版官方模块和版本/摘要；详情路由只允许当前官方 owner 身份访问，不接收任意磁盘路径。
+- 写入：仅用户正常创建/追加/分叉时，由官方单写者 lease/原子发布协议写完整会话日志；新懒读模块自身不拆分、外置、裁剪或删除原文。
+- 没有安装生命周期脚本、第三方下载、后台巡检、强制 GC、凭据读取或对外网络请求。浏览器只同源请求 owner-only 详情路由。
+- 卸载/回退也应先完整退出 Host，再移除本 bundle并重启，让原三项 provider 恢复；不要对基础provider做运行中热切换。
 
-| 端点 | 说明 |
-|---|---|
-| `GET /lazyview` | HTML 面板：按项目分组列出会话，>10MB 标红，每行 tail 按钮展开最近 2 帧，支持“上一页” |
-| `GET /lazyview/api/list` | JSON：`{root, projects:[{project, sessions:[{sessionId, path, artifact, format, bytes, mtime, big}]}]}`，纯 stat |
-| `GET /lazyview/api/tail?path=<相对路径>&frames=2&skip=0` | JSON：从尾部解压 `frames` 帧；`skip` 为翻页偏移（跳过最新 skip 帧后再取 frames 帧）。帧内事件已文本化（role + 截断到 2000 字符的 text / tool-call / tool-result） |
-
-`path` 必须是 `/api/list` 返回的 `path`（相对 sessions 根，且必须以
-`session.v3.jsonl.zstd` 或 `session.jsonl.zstd` 结尾）；路径逃逸检查在服务端。
-
-解析失败（坏帧、旧格式、窗口截断等）一律返回
-`{ok:false, error:{code, message}}` 结构化错误，不会 500 崩面板。
-
-## 已知限制
-
-- 旧格式 `session.jsonl.zstd` 单帧等于整份文件，tail 读取没有惰性收益。
-- 尾部窗口默认 1MB，最多增长到 64MB；极端情况下（单帧超过 64MB）返回
-  `truncatedScan: true` 且可能少帧，不会死循环。
-- 帧魔数理论上可能出现在压缩数据内部造成假候选；假候选解压失败后以
-  per-frame `error` 呈现，不影响其余帧。
-- 事件文本化只覆盖已验证的形状（user/assistant/system message、tool call/result），
-  其余事件类型输出紧凑 JSON 摘要。
-- 未做缓存：每次 tail 请求都重新读窗口，对调试场景足够。
-
-## 离线验证
-
-```bash
-./verify.sh
-```
-
-用 node 直接 import `./lib/frames.js`，对 `~/.dsh/sessions` 下任一
-`.zstd` 会话执行“读最后 2 帧”，打印事件条数与首条 role。
-
-## v0.2.0 新增
-
-**仍然是纯只读**：全部新功能对 `~/.dsh/sessions` 零写入（不缓存、不落盘），
-依旧不删除、不归档、不碰任何侧边栏注册面——所有能力都挂在自己的
-`/lazyview/*` HTTP 端点与 panel.html 面板里。
-
-| 端点 | 说明 |
-|---|---|
-| `GET /lazyview/api/search?path=&q=&max=20` | 会话内全文搜索：流式逐帧解压做大小写不敏感子串匹配，命中返回 `{frameIndex, seq, type, role, snippet}`（命中点前后各 60 字符窗口）。达 `max` 截断；默认最多扫 500 帧，未扫完返回 `partial:true`。每帧之间 `setImmediate` 让出事件循环，客户端断开（AbortSignal）即中止扫描 |
-| `GET /lazyview/api/stats?path=[&fast=1]` | 会话统计：帧数、总事件数、按 type 分组计数、首/末事件时间、文件字节数、session header。`fast=1` 只流式扫描帧魔数（不解压、内存有界）给帧数/字节数 |
-| `GET /lazyview/api/export?path=&frames=N` | 把最近 N 帧（≤20）导出为 Markdown 文本下载（`Content-Disposition: attachment`）。文本在内存中生成直接响应，不写任何文件 |
-
-面板集成：每个会话行新增「搜索」按钮（展开输入框 + 命中结果列表，命中
-标注帧号/seq/type/片段，新搜索自动取消上一次）；打开会话顶部新增「统计」
-小节（先展示 fast 帧数/字节，按钮展开全量解压统计）与「导出 md」下载链接。
-
-测试：`npm test`（即 `node --test "test/*.test.js"`；零依赖，用 `node:zlib` 自造多帧 fixture，
-覆盖搜索命中/截断/abort、stats 分组、export 渲染）。
-
-性能取舍说明：
-
-- 解压是同步的（`zstdDecompressSync`），全量扫描在帧与帧之间用
-  `setImmediate` 让出事件循环（参照 dsh-src `ZSTD_DECODE_YIELD_INTERVAL_MS`
-  思路），单个大文件的搜索/统计不会长时间阻塞 web server；但**一次请求
-  内整份文件会被读进内存**（read-only，读完即释放），超大文件请优先
-  `?fast=1` 或改用 tail。
-- 搜索只覆盖事件文本化后的可见文本（`describeEvent`，单条截断到 2000
-  字符）；无法文本化的行仍按原文参与匹配。
-- 全量统计对大文件是秒级操作（每帧解压一次）；面板默认只拉 fast 统计，
-  全量按需展开。
-
-## v0.2.1 评审修复
-
-- **可发现性（P0）**：README 与面板页顶部均加显著说明——面板是 `/lazyview`
-  独立页，宿主侧边栏无入口是有意设计（纯只读工具）；面板页新增
-  「复制面板链接」按钮；README 注明装了 dsh-devkit 可用 Ctrl+K 打开。
-- **S1（P1）**：360px 表格溢出修复——session id 列截断省略（`title` 悬停看全），
-  mtime 列在 ≤480px 隐藏（`hide-sm`）。
-- **S2（P2）**：全部按钮触控目标提升到 ≥44×44px。
-- **S3（P2）**：统计小节预留固定高度占位（fast→full 替换前锁定高度），防 CLS。
-- **S5（P3）**：`#status` 加 `role="status" aria-live="polite"`，读屏可闻。
-
-## v0.3.0 Timeline 视图
-
-按 turn 分组的正序事件时间线（vscode Timeline 式阅读投影），设计文档见
-`timeline-design.md`：
-
-- 会话打开视图顶部新增「时间线」按钮，与帧流互斥切换；数据复用
-  `/api/tail` 翻页到文件头后按 seq 正序拼接（无需新端点）。
-- 分组规则：有 `turn/start` 事件时它开新组；历史格式以 `user/message`
-  为组边界。组默认折叠一行摘要，展开显示全部事件；折叠状态存内存。
-- Go to Message 深链：`/lazyview?session=<id>&seq=<n>` 自动打开会话、
-  进时间线、展开目标组并高亮首个 seq≥n 的事件。
-- message-ops 遮蔽标注：事件自带 `surfaceOp`（op:"replace"）时，被替换
-  区间内的事件在时间线上渲染为半透明 +「已遮蔽」徽标；纯本地计算，
-  不依赖 message-ops 端点。只读铁律不变。
-- 纯函数（深链解析 / 遮蔽计算 / 分组）抽到 `lib/timeline.js`，一份两用：
-  ESM 供测试，服务端剥 export 内联进面板。
-
-## v0.3.2 v4 会话支持
-
-- 用户实测发现：DSH 新会话写 `session.v4.jsonl.zstd`（帧 0 header
-  `version:4`），面板此前只探测 v3/legacy，新会话全部不可见。
-- 修复：artifact 名单统一抽到 `lib/artifact.js`（`session.vN.jsonl.zstd`
-  形状正则），目录探测与 `?path=` 校验共用；未来新版本号自动纳入，
-  frames.js 无版本硬校验（header.version 原样透传），无需再改。
-- 面板 format 列区分 `v4-multiframe` / `v3-multiframe` / `legacy-single-frame`。
-
-## v0.3.3 可访问性补齐
-
-- 时间线分组折叠头（.ghead）从纯点击 div 改为键盘可达：`role="button"`
-  + `tabindex="0"` + Enter/Space 触发 + `aria-expanded` 与折叠 Map 同步。
-
-## 0.3.4 · Bug 猎场修复
-
-- **[P1] 深链白屏**：`?session=` 访问在 `sessions.map` 回调外引用回调参数 `s` →
-  ReferenceError 被 catch 吞掉，面板一个会话都不渲染（0.3.0–0.3.3 全中）。改为在
-  project 的 sessions 内匹配 + 表格行定位打开按钮。
-- **[P1] 遮蔽标注失效**：applySurfaceOps 只认 `fromSeq/toSeq`（message-ops 从没写过
-  这种拼写）——真实数据是 `start/end`（新引擎）与 `startSeq/endSeq`（legacy）。三拼写
-  全兼容 + 真实拼写回归测试（原测试只喂假拼写 = 假绿）。
-- **[P2] esc 补转义引号**：`title="…"`/`data-path="…"` 是双引号属性而 listSessions
-  不校验目录名 → 本地目录名可属性逃逸存储型 XSS。
-
-## 0.3.5 · frames.js 两个实测 bug（P2×2）
-
-- **EOF 死循环**：forEachFrame 读到 0 字节（stat 后并发截断）永不推进 → search/stats
-  请求悬挂 + fs 空转可拖垮 web 进程 → 0 字节即停。
-- **countFrames carry 丢字节**：每轮全零新缓冲从未拷入上轮 3 字节 carry → 跨 1MB
-  边界 zstd magic 全漏计（实测 magic@边界 count=0 应 1）→ `?fast=1` 对 >1MB 文件
-  系统性偏低。回归测试在原代码上实证红（15/1 → 16/16）。
+实现模块与原理记录见 [DEVELOPMENT.md](DEVELOPMENT.md)。原离线精简工具在兄弟目录保持原有仅裁逐 token 回放的功能，23 项回归已通过；它没有启用被取消的外置模式。

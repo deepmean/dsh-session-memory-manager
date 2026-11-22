@@ -1,4 +1,36 @@
-# dsh-session-lazy-view bundle patch: mounts the plugin as one cordis loader entry.
+# Cold-start replacement only. Do not enable this bundle through HMR in a running Host.
+# Native providers remain source-compatible but presentation reads use explicit bounded meta views.
+- id: session-persistence-jsonl
+  disabled: true
+- id: agent-loop
+  disabled: true
+- id: session-query-sqlite
+  disabled: true
 - insert:
-    - id: dsh-session-lazy-view
-      name: '@240xu/dsh-session-lazy-view'
+    - id: ptc-disk-history-persistence
+      name: '@local/dsh-ptc-disk-history/persistence'
+      config:
+        root: !!js dshHomePath('sessions')
+        compression: zstd
+        listConcurrency: 3
+        workerHeapMiB: 192
+        requestTimeoutMs: 90000
+        maxFrameMiB: 64
+        previewBytes: 4096
+        thresholdBytes: 32768
+    - id: ptc-disk-history-agent-loop
+      name: '@local/dsh-ptc-disk-history/agent-loop'
+      inject: ['sessionPersistence']
+      config:
+        agents: []
+    - id: ptc-disk-history-query
+      name: '@local/dsh-ptc-disk-history/query'
+      inject: ['sessionPersistence']
+      config:
+        path: ':memory:'
+        openAt: never
+        preparedSessionCacheSize: 1
+    - id: ptc-disk-history-tool
+      name: '@local/dsh-ptc-disk-history/tool'
+    - id: ptc-disk-history
+      name: '@local/dsh-ptc-disk-history'

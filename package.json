@@ -1,39 +1,38 @@
 {
-  "name": "@240xu/dsh-session-lazy-view",
-  "version": "0.3.6",
-  "description": "DSH web plugin: read-only lazy session viewer. Lists ~/.dsh/sessions (stat-only) and peeks at the last N zstd frames of any session artifact without decompressing the whole file.",
+  "name": "@local/dsh-ptc-disk-history",
+  "version": "0.1.0-alpha.2",
+  "private": true,
+  "description": "PTC read history from the original session log, with bounded native cold restore and explicit detail paging.",
   "type": "module",
-  "main": "lib/index.js",
+  "main": "lib/plugin.js",
+  "icon": "icon.svg",
   "exports": {
-    ".": {
-      "default": "./lib/index.js"
-    },
-    "./frames": {
-      "default": "./lib/frames.js"
-    },
+    ".": "./lib/plugin.js",
+    "./persistence": "./lib/persistence-plugin.js",
+    "./agent-loop": "./lib/agent-loop-plugin.js",
+    "./query": "./lib/query-plugin.js",
+    "./tool": "./lib/tool-plugin.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./persistence/locale/*.json": "./locale/*.json",
+    "./persistence/icon": "./icon.svg",
+    "./agent-loop/locale/*.json": "./locale/*.json",
+    "./agent-loop/icon": "./icon.svg",
+    "./query/locale/*.json": "./locale/*.json",
+    "./query/icon": "./icon.svg",
+    "./tool/locale/*.json": "./locale/*.json",
+    "./tool/icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "engines": {
-    "node": ">=24"
-  },
+  "engines": { "node": ">=24", "dsh": ">=0.2.2-rc.5" },
   "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-tool", "@deepseek-ai/dsh-client-ui-session"] }
   },
   "license": "MIT",
-  "author": "240xu",
-  "files": [
-    "lib",
-    "cordis.patch.yml",
-    "README.md",
-    "package.json"
-  ],
-  "scripts": {
-    "test": "node --test \"test/*.test.js\""
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/240xu/dsh-session-lazy-view.git"
-  }
+  "author": "Local adaptation; upstream lazy-view by 240xu",
+  "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "README.md", "DEVELOPMENT.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "scripts/prepare-native.mjs", "scripts/check.mjs"],
+  "scripts": { "test": "node --test \"test/*.test.js\"", "check": "node scripts/check.mjs" },
+  "repository": { "type": "git", "url": "git+https://github.com/240xu/dsh-session-lazy-view.git" }
 }
