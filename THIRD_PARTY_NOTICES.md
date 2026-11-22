@@ -5,7 +5,7 @@
 This local experimental adaptation starts from `240xu/dsh-session-lazy-view` version 0.3.6, commit `6224eb1e41b9408de1a9aec2749a21a4e0c8f31d`.
 Upstream: https://github.com/240xu/dsh-session-lazy-view
 Copyright (c) 2026 240xu. MIT; the original license is retained in `LICENSE`.
-Original reader/panel source is retained for attribution and regression comparison. The installed runtime exports the new explicit disk-presentation modules rather than the upstream `/lazyview` route or magic-based scanner.
+The legacy viewer source and `/lazyview` route have been removed from this package. The upstream source provenance and MIT license attribution above are retained; see `LICENSE` for the original license.
 
 ## DeepSeek Harness
 
