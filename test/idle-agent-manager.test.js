@@ -60,6 +60,23 @@ test('rearms after activity invalidates an in-flight timer callback',async()=>{
  f.fire();await f.manager.waitUntilAvailable('s');assert.deepEqual(f.disposed,[f.handle]);
 });
 
+test('track replacement waits for old handle disposal before switching records',async()=>{
+ const f=fixture();let finishOldDispose;let oldDisposeCalls=0;let newDisposeCalls=0;
+ const oldHandle={agent:f.agent,dispose(){oldDisposeCalls++;return new Promise(resolve=>{finishOldDispose=resolve;});}};
+ const replacementAgent={status:'idle',inbox:{nextTurn:[],nextStep:[]}};
+ const replacementHandle={agent:replacementAgent,dispose(){newDisposeCalls++;}};
+ f.manager.track({sessionId:'s',agent:f.agent,handle:oldHandle,provenance:'owned'});
+ f.manager.noteActivity('s');f.fire();
+ assert.equal(f.manager.isEvicting('s'),true);
+ const oldEviction=f.manager.waitUntilAvailable('s');let settled=false;oldEviction.then(()=>{settled=true;});
+ f.manager.track({sessionId:'s',agent:replacementAgent,handle:replacementHandle,provenance:'owned'});
+ assert.equal(f.manager.isEvicting('s'),true);assert.equal(settled,false);
+ await Promise.resolve();assert.equal(oldDisposeCalls,1);assert.equal(settled,false);
+ finishOldDispose();await oldEviction;assert.equal(settled,true);
+ f.manager.noteActivity('s');assert.equal(f.timers.size,1);
+ f.fire();await f.manager.waitUntilAvailable('s');
+ assert.equal(oldDisposeCalls,1);assert.equal(newDisposeCalls,1);
+});
 test('failed handle disposal stays observable and retryable',async()=>{
  const f=fixture();let attempts=0;const failure=new Error('controller refused disposal');
  f.handle.dispose=()=>{attempts++;if(attempts===1)throw failure;f.disposed.push(f.handle);};

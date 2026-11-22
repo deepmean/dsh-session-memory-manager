@@ -28,9 +28,19 @@ A self-review identified a related stale-callback bug: a canceled callback could
 
 ## Verification
 
-- `node --test test/idle-agent-manager.test.js`: 10 passed, 0 failed.
-- `npm test`: 102 passed, 0 failed.
+- `node --test test/idle-agent-manager.test.js`: 11 passed, 0 failed.
+- `npm test`: 103 passed, 0 failed.
 - `npm run check`: passed (`runtime syntax, explicit exports, API baseline, locale metadata and self-contained SVG`).
+
+## Review Fix R1: Pending Replacement
+
+The reviewer found that replacing a session record while its old `handle.dispose()` promise was pending made `isEvicting()` and `waitUntilAvailable()` consult a new record, orphaning visibility of the still-running disposal.
+
+A deferred-disposal regression was added first. It verifies that replacement tracking leaves the old record observable as evicting, that `waitUntilAvailable()` remains pending until old disposal fulfills, and that the replacement is then tracked and can be evicted normally. Before the fix it failed at the `isEvicting()` assertion (false instead of true).
+
+The fix queues a replacement on the existing record while eviction is pending, keeping the old record and promise authoritative. On successful disposal, finalization atomically installs the queued record with the current viewer count and arms it if eligible. On disposal rejection, the old handle remains tracked and the queued replacement is retained; this avoids losing a handle that the controller did not confirm disposing. This serialization is preferable to rejecting `track()` because the caller's requested replacement is retained and made available after the controller confirms release.
+
+The fix and regression are included in the R1 follow-up commit.
 
 ## Scope and Concerns
 
