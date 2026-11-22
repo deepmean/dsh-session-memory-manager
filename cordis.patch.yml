@@ -1,5 +1,9 @@
 # Cold-start replacement only. Do not enable this bundle through HMR in a running Host.
-# Native providers remain source-compatible but presentation reads use explicit bounded meta views.
+# Keep the Web native row enabled for its Client and Typert sidecars. On the
+# supported path, one optional warning about its pending standby is expected.
+- id: session-controller
+  name: '@deepseek-ai/dsh-api-session-controller'
+  inject: [dshSessionMemoryNativeFallback]
 - id: session-persistence-jsonl
   disabled: true
 - id: agent-loop
@@ -7,8 +11,12 @@
 - id: session-query-sqlite
   disabled: true
 - insert:
+    - id: session-memory-controller
+      name: '@local/dsh-session-memory-manager/session-controller'
+      config:
+        idleReclaimMinutes: 5
     - id: ptc-disk-history-persistence
-      name: '@local/dsh-ptc-disk-history/persistence'
+      name: '@local/dsh-session-memory-manager/persistence'
       config:
         root: !!js dshHomePath('sessions')
         compression: zstd
@@ -19,18 +27,18 @@
         previewBytes: 4096
         thresholdBytes: 32768
     - id: ptc-disk-history-agent-loop
-      name: '@local/dsh-ptc-disk-history/agent-loop'
+      name: '@local/dsh-session-memory-manager/agent-loop'
       inject: ['sessionPersistence']
       config:
         agents: []
     - id: ptc-disk-history-query
-      name: '@local/dsh-ptc-disk-history/query'
+      name: '@local/dsh-session-memory-manager/query'
       inject: ['sessionPersistence']
       config:
         path: ':memory:'
         openAt: never
         preparedSessionCacheSize: 1
     - id: ptc-disk-history-tool
-      name: '@local/dsh-ptc-disk-history/tool'
+      name: '@local/dsh-session-memory-manager/tool'
     - id: ptc-disk-history
-      name: '@local/dsh-ptc-disk-history'
+      name: '@local/dsh-session-memory-manager'

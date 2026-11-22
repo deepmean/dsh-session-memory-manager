@@ -1,8 +1,8 @@
 {
-  "name": "@local/dsh-ptc-disk-history",
-  "version": "0.1.0-alpha.2",
+  "name": "@local/dsh-session-memory-manager",
+  "version": "0.1.0-alpha.3",
   "private": true,
-  "description": "PTC read history from the original session log, with bounded native cold restore and explicit detail paging.",
+  "description": "Session-memory retention with bounded PTC history and native-controller fallback.",
   "type": "module",
   "main": "lib/plugin.js",
   "icon": "icon.svg",
@@ -12,6 +12,7 @@
     "./agent-loop": "./lib/agent-loop-plugin.js",
     "./query": "./lib/query-plugin.js",
     "./tool": "./lib/tool-plugin.js",
+    "./session-controller": "./lib/session-controller-plugin.js",
     "./client": "./lib/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
@@ -23,16 +24,18 @@
     "./query/icon": "./icon.svg",
     "./tool/locale/*.json": "./locale/*.json",
     "./tool/icon": "./icon.svg",
+    "./session-controller/locale/*.json": "./locale/*.json",
+    "./session-controller/icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "engines": { "node": ">=24", "dsh": ">=0.2.2-rc.5" },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-tool", "@deepseek-ai/dsh-client-ui-session"] }
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-tool", "@deepseek-ai/dsh-client-ui-session", "@deepseek-ai/dsh-client-ui-plugin-manager"] }
   },
   "license": "MIT",
-  "author": "Local adaptation; upstream lazy-view by 240xu",
+  "author": "DeepMean",
   "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "README.md", "DEVELOPMENT.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "scripts/prepare-native.mjs", "scripts/check.mjs"],
   "scripts": { "test": "node --test \"test/*.test.js\"", "check": "node scripts/check.mjs" },
-  "repository": { "type": "git", "url": "git+https://github.com/240xu/dsh-session-lazy-view.git" }
+  "repository": { "type": "git", "url": "git+https://github.com/deepmean/dsh-session-memory-manager.git" }
 }
