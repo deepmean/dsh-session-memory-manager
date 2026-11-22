@@ -25,7 +25,7 @@
 ## File Map
 
 - `package.json`: rename package/repository to `@local/dsh-session-memory-manager` / the new GitHub repo; bump alpha version, retain DSH peer baseline.
-- `cordis.patch.yml`: mount passive/idle controller adapter and existing PTC persistence/AgentLoop/query/UI/tool rows; retain explicit cold-start-only behavior.
+- `cordis.patch.yml`: keep the native `session-controller` row enabled with `inject: [dshSessionMemoryNativeFallback]` so the native browser package and Typert sidecars remain in the Client roster; insert one `session-memory-controller` row that supplies the replacement service and only releases the fallback token after compatibility/init. Disable only the alpha2-replaced persistence/agent-loop/query rows; keep explicit cold-start-only behavior.
 - `lib/session-controller-adapter.js`: subclass the installed SessionController; extend its Config; in Cordis `Service.init` create a child Context with a proxy around only the session-controller-owned `agents` service; capture exact handles returned by its `create`/`resume` calls; override `follow` to hold viewer leases and force passive browsing.
 - `lib/idle-agent-manager.js`: pure per-session state machine for owner handles, viewer refs, busy/inbox checks, generation tokens, one-shot timers, and disposal results.
 - `lib/plugin.js`: preserve the existing owner-only PTC detail route; it does not own Agent lifecycle.
@@ -52,7 +52,7 @@
 - Create: `test/idle-agent-manager.test.js`
 
 **Interfaces:**
-- Produces `createIdleAgentManager({ idleMs, setTimer, clearTimer, onError })` with `track({ sessionId, agent, handle, provenance })`, `viewerOpened(sessionId) -> release`, `viewerClosed(sessionId)`, `noteActivity(sessionId)`, `statusChanged(agent)`, `inboxChanged(agent)`, `isEvicting(sessionId)`, `waitUntilAvailable(sessionId)`, `dispose()`.
+- Produces `createIdleAgentManager({ idleMs, setTimer, clearTimer, isCurrent, onError })` with `track({ sessionId, agent, handle, provenance })`, `viewerOpened(sessionId) -> release`, `viewerClosed(sessionId)`, `beginActivity(sessionId) -> release`, `noteActivity(sessionId)`, `statusChanged(agent)`, `inboxChanged(agent)`, `forget({ sessionId, agent })`, `isEvicting(sessionId)`, `waitUntilAvailable(sessionId)`, `setIdleMs(ms)`, and awaitable `dispose()`.
 - A tracked record contains exact AgentHandle identity, viewer count, monotonic generation, one timer, and one pending eviction promise. Untracked session ids still retain a viewer count while one or more follow leases exist; `track()` inherits that count. The manager never discovers Agents by enumerating `ctx.agents` and never calls `Agent.dispose()`.
 
 - [ ] **Step 1: Write failing tests** named `does not schedule while a viewer is attached`, `viewer opened before track is inherited by the tracked Agent`, `releases once after last viewer and full idle grace`, `never releases running or nonempty inbox agent`, `cancels stale timeout after prompt or viewer reopen`, `rearms after activity invalidates an in-flight timer callback`, `ignores unowned configured agents and subagents`, `dispose cancels all timers`.
@@ -66,13 +66,14 @@
 - Modify: `lib/session-controller-adapter.js`, `test/session-controller-adapter.test.js`
 
 **Interfaces:**
-- `createSessionControllerAdapter(Base, cordis)` returns a subclass. Copy the exact Typert Remote-method descriptor symbol/value from `Base.prototype` onto the subclass prototype so Gateway resolution continues to expose the unchanged API.
-- `static Config` is `Base.Config.set('idleReclaimMinutes', Schemastery.union([0, 1, 5, 15].map(value => Schemastery.const(value))).default(5).description(...))`, preserving every upstream field and providing the Plugin Manager row-config form.
+- `createSessionControllerAdapter(Base, cordis)` returns a subclass. Installed decorators define Remote metadata on the concrete instance prototype during `super()`; verify the exact 25 markers there without mutating `Base.prototype` or introducing new Remote methods.
+- `static Config` clones `Base.Config` (`new Schemastery(Base.Config.toJSON())`) before adding a volatile `idleReclaimMinutes` enum with default 5. Never call `.set()` on the shared upstream schema; it mutates in place.
 - The subclass constructor calls `super(ctx, config, internals)` unchanged and stores `config.idleReclaimMinutes`. Its override of `[cordis.Service.init]()` creates the manager and a child `ctx.extend({agents: proxy})`, temporarily sets the inherited `ctx` to that child while invoking `super[cordis.Service.init]()`, and restores the original service context in `finally` after upstream initialization has captured its dependent controllers.
 - The scoped AgentRegistry proxy wraps `create`/`resume` results only long enough to give the exact original handle to `manager.track`; it returns the original handle unchanged. `get` returns undefined while the same id is being evicted, otherwise it calls `noteActivity` for already tracked Agents. `resume` awaits `manager.waitUntilAvailable(id)` before invoking the original method. Other service methods and receivers are forwarded unchanged. Agents with `header.origin === 'subagent'` are rejected by the manager.
-- `follow(request, signal)` opens a viewer lease and delegates to `super.follow({...request, activate:false}, signal)` inside `try/finally`. It preserves snapshot/event frames but never activates an Agent just to browse history.
-- `prompt`, `updateQueue`, `cancel`, and other Agent-mutating commands call `noteActivity` for the target identity before delegating. Listener hooks for `agent/status` and inbox transitions invalidate timers on external work.
-- `cordis.patch.yml` disables the existing Web `session-controller` entry and inserts one `session-memory-controller` entry using this class; the original Typert service key remains `sessionController`, so exactly one provider is active.
+- `follow(request, signal)` opens a viewer lease before waiting for an in-flight eviction, races that wait against signal abort, and releases in `finally`; it delegates to `super.follow({...request, activate:false}, signal)`, preserving frames without activating an Agent just to browse history.
+- Agent-mutating commands acquire activity leases around complete async calls (synchronous `cancel` holds one only for its sync call). Native status/inbox listeners invalidate timers. The per-instance native `ApiSessionAgentController.resolveAgent` wrapper holds a lease while resolving and forgets the exact Agent after an external borrow; controller work marked by the private AsyncLocalStorage owner remains tracked.
+- Cordis cleanup and lifecycle listeners are registered before `super[cordis.Service.init]()` so an upstream initialization failure still drains the manager. On plugin teardown, the manager cancels timers and awaits any committed exact-handle disposal.
+- The Web `session-controller` Loader entry stays enabled, waiting on the fallback gate so its browser entry and Typert sidecar remain available. The single distinct `session-memory-controller` entry owns the replacement. If initialization fails, wait for the partial child to dispose before releasing the gate. This is a cold-start switch, not a hot-swap protocol.
 - The adapter verifies the installed class constructor, all Remote method markers, dependency keys and config schema against the current DSH before mounting. Any missing/extra required shape prevents activation.
 
 - [ ] **Step 1: Write failing adapter tests** for Remote marker parity, upstream Config fields plus idle enum/default, child-context proxy capturing exact create/resume handles, passive follow with unchanged frames, viewer lease release, and resume waiting for eviction.
@@ -89,7 +90,7 @@
 
 **Interfaces:**
 - Controller config: `idleReclaimMinutes: 0 | 1 | 5 | 15`, default 5.
-- `createIdleAgentManager({idleMs, setTimer, clearTimer, onError})` exposes `track({sessionId, handle, agent})`, `viewerOpened(sessionId) -> release`, `viewerClosed(sessionId)`, `noteActivity(sessionId)`, `agentStatusChanged(agent)`, `inboxChanged(agent)`, `isEvicting(sessionId)`, `waitUntilAvailable(sessionId)`, and `dispose()`.
+- `createIdleAgentManager({idleMs, setTimer, clearTimer, isCurrent, onError})` exposes `track({sessionId, handle, agent, provenance})`, `viewerOpened(sessionId) -> release`, `viewerClosed(sessionId)`, `beginActivity(sessionId) -> release`, `noteActivity(sessionId)`, `statusChanged(agent)`, `inboxChanged(agent)`, `forget({sessionId, agent})`, `isEvicting(sessionId)`, `waitUntilAvailable(sessionId)`, `setIdleMs(ms)`, and awaitable `dispose()`.
 - Only the session-controller child context's AgentRegistry `create`/`resume` proxy registers handles; this is the ownership proof. Configured AgentLoop and subagent contexts are not proxied. A `get(sessionId)` for a tracked Agent invalidates its timer; while its exact handle is disposing it returns `undefined`, and a subsequent `resume` waits for disposal to settle.
 
 - [ ] **Step 1: Add failing race tests** for final viewer leaving, reopen before timeout, prompt admission at timeout, busy status, nonempty inbox, subagent ownership, and controller unload.
@@ -101,7 +102,9 @@
 ### Task 4: Plugin Configuration GUI and Bundle Rename
 
 **Files:**
-- Modify: `cordis.patch.yml` to disable `session-controller` and insert a single `session-memory-controller` row with `idleReclaimMinutes: 5`; modify bundle metadata/locales as needed.
+- Modify: `cordis.patch.yml` to keep native `session-controller` enabled behind `dshSessionMemoryNativeFallback`, insert `session-memory-controller`, and disable only the alpha2-replaced persistence/AgentLoop/query rows; preserve native Client and Typert sidecars.
+- Create: `lib/session-controller-plugin.js` for the version-gated child adapter and native fallback rollback.
+- Delete: obsolete alpha1/lazy-viewer runtime, panel, tests, design note and publish workflow; retain upstream provenance in `THIRD_PARTY_NOTICES.md` and `LICENSE`.
 
 - Modify: `lib/plugin.js`, `lib/persistence-plugin.js`, `README.md`, `DEVELOPMENT.md`, `THIRD_PARTY_NOTICES.md`
 - Test: `test/native-loader.test.js`, `test/client.test.js`, `scripts/check.mjs`

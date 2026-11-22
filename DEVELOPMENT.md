@@ -1,51 +1,31 @@
-# PTC disk history：单日志按需展示（开发中）
+# 会话内存管理器：开发说明
 
-基座：240xu/dsh-session-lazy-view 0.3.6，MIT。不是 Reaper 的热修版本。
-最低API基线为DSH `0.2.2-rc.5`，package manifest不设上限。每次Host activation从本机安装动态生成临时native适配快照：要求DSH与persistence包版本一致、检查已知类/方法结构；不携带静态native快照，不兼容时fail closed。
+## 会话生命周期
 
-## 数据规则
+`lib/session-controller-adapter.js` 使用安装版 SessionController。仅在自身的 Cordis Context 中拦截 AgentRegistry `create` 和 `resume`，保留原生返回的 `AgentHandle`。`follow` 始终使用被动观察，查看租约随流关闭释放。需要 Agent 的会话操作会占用活动租约，直到原生命令完成。
 
-- 大展示原文只在原 session.v4.jsonl.zstd 中，不拆分、不新建payload侧文件、不改写原历史。
-- PTC read 的大 meta.lines在官方V4逐事件准入后，内存/GUI观察使用明确标注的普通预览与临时token。
-- 不使用getter水合；JSON.stringify只处理预览，只有详情按钮会异步分页读原物理帧。
-- 原事件身份、seq、调用配对、content、arguments、错误及模型可见消息保持不变。
-- 正式存储默认 open/read仍完整，用于原生日志导出；GUI原生恢复与观察通过显式presentation适配器选择薄视图。
-- 写前按事件恢复完整meta，使用官方catalog编码；旧物化日志正常append的既有字节前缀保持不变。
-- worker最多192MiB old generation、来源索引2份、引用50000条、页面64KiB；这些不是进程总RSS硬上限。
-- 关闭worker使用Cordis effect disposer，不依赖不存在的dispose事件，不使用后台巡检。
+`lib/idle-agent-manager.js` 在最后一个租约释放后为符合条件的实例安排一次定时器。触发时重新检查句柄、实例、世代、查看者、正在处理的操作、真正的空闲阶段和两个收件队列。最终只调用确切的 `AgentHandle.dispose()`；关闭插件会撤销定时器并等待已经开始的释放，没有扫描循环或强制 GC。
 
-## 接入方式
+`session-memory-controller` 插入独立的 Host 行，提供同一个 `sessionController` 服务。内置行由私有条件置于待机，保留其浏览器包与 Typert 描述；只有替换不兼容或启动失败并收尾后才放行原生 Host。该集成只在冷启动切换。配置页通过 DSH 自身的配置表单和版本校验写入 `.volatile()` 字段，不直接读写 profile 文件。
 
-需要在冷启动之前整体替换三个provider：session-persistence-jsonl、agent-loop、session-query-sqlite；详情路由和客户端随bundle启用。不能在正在运行的Host里事后替换基础持久化服务。
+未知版本、缺少身份依据或其他插件独立持有的 Agent 不属于回收范围。不要把此机制当成任意第三方插件工作的全局锁。
 
-每次验证目标DSH版本：
+## PTC 存储与展示
+
+- 会话日志是唯一正文来源。官方 V4 校验后，只对大型 `read` 展示元数据生成有标记的预览和临时详情标识；无自动水合、无正文索引旁文件。
+- 详情查询利用 Zstandard 物理帧位置以及日志修订校验按页读取。原生完整存储 API 不混用展示缓存；写入前逐事件恢复原元数据，再由官方 catalog 编码。正常追加保留旧压缩前缀。
+- worker 默认老生代限制为 192 MiB，一次传送至多 256 个待确认事件。默认压缩帧上限 64 MiB、单行上限 8 MiB；超限、坏帧和撕裂尾部不静默换成全量解析。这些限制不是进程 RSS 上限。
+- V0–V3 迁移和完整导出仍走官方全量路径。现有原生 `read` 行被轻量行替换，保留文件打开、调用检查和分页操作，不复用原生语法高亮或文件右键菜单。
+- 存储适配按安装版生成匹配的临时实现，用完随 Cordis Fiber 清理；不修改 DSH 安装文件。会话回收另外精确检查 DSH、SessionController 与 AgentLoop 的 `0.2.2-rc.5` 版本及接口。
+
+## 隔离验证
 
 ```powershell
-$env:DSH_INSTALL_DIR='C:\softwares\node-arm64\node_modules\@deepseek-ai\dsh'
+$env:DSH_INSTALL_DIR = '<已安装的 @deepseek-ai/dsh 包目录>'
+node --test 'test/*.test.js'
 node scripts/check.mjs
-node --test "test/*.test.js"
 ```
 
-Host activation时从当前官方安装动态生成private native backend到系统临时目录，运行时检验包版本和类/方法布局，Fiber dispose时清理临时快照。`scripts/prepare-native.mjs`为独立诊断工具，默认也只写系统临时目录；生成代码保留官方LICENSE与source SHA256，不修改安装版DSH文件。
+当前工作树证据：全量隔离测试 `124/124` 通过并正常退出；`scripts/check.mjs` 通过；Adapter/native lifecycle `15/15`、Client 配置 `21/21`、Loader bundle `7/7` 均通过。测试使用隔离 Cordis 树和临时会话日志，不需要当前 profile，也不向远程模型发送请求。回收前后用日志长度、SHA-256 和 `deriveMessages()` 对比完整性；实际 Host 巡检应看在线 Agent 数与 Session 是否脱离注册表，不只看 RSS。
 
-## 目前验证
-
-- 精确物理帧、跨帧JSONL、压缩数据内magic、checksum、stale修订、Unicode超长行续读、响应字节上限。
-- 真实官方存储与query服务：薄/完整cache隔离、模型消息一致、append原始压缩前缀不变。
-- 复制子会话后移走父日志，子日志完整原文仍在且内存引用可恢复。
-- 详情HTTP边界、主页面点击后才读、上一页游标有界、收起/卸载abort释放。
-
-原生 AgentRegistry/AgentLoop恢复的完整隔离组合已通过（不调用模型）；alpha.2合计92项自动化测试通过。UI的虚拟组件测试尚不等于当前Web GUI冷启动验收。
-新 live PTC 结果仍走官方完整发布流程，本版只优化历史冷恢复/查询，新结果要到后续冷加载才转为薄视图；不宣称运行中所有metadata有驻留上限。
-原生ZIP使用storage完整read，不会把预览写进ZIP，但显式全量export仍可能需要大量内存。
-V0-V3迁移暂走官方完整迁移路径；目标native V4由新路径处理。坏/撕裂尾部不会静默丢弃，presentation路径先拒绝，不承诺优化crash-repair。
-
-## 内存对照记录
-
-相同规模合成单事件：约30.6MiB meta原文。
-官方完整读取：主线程GC后增量约31.2MiB，RSS124MiB，耗时286ms。
-新展示读取：主线程GC后增量约0.1MiB，4KiB预览，RSS305MiB，耗时2079ms。
-该合成单大行测试说明新路径改变了驻留形态，但worker与瞬时解析会增加成本，不能只看主线程heap宣称总内存更小。
-
-用户旧会话独立只读复测（alpha.2）：目标失败会话77,083事件/27,688,077压缩字节，192MiB worker、1GiB诊断主堆下耗时6,623ms，RSS484.3MiB，302个ACK batch，最大batch256；SHA-256前后相同。
-64.6MiB大日志20,813事件/1169个长PTC metadata：耗时28,487ms，RSS485.2MiB，主线程GC后heap212.5MiB，82个batch，最大256；SHA-256前后相同。两者均无自动详情读取、源日志写入或外置正文文件。
+合成约 32.1 MB PTC 行数据的展示扫描保留 4 KiB 预览，没有创建外置 payload 文件；该测试测量的是展示路径的有界传输，不是完整 Host RSS 上限。
