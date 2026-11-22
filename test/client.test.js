@@ -14,6 +14,7 @@ function hooks() {
     useId() { return `test-id-${cursor++}`; },
     useState(initial) { const i = cursor++; cells[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [cells[i].value, value => { cells[i].value = typeof value === 'function' ? value(cells[i].value) : value; }]; },
     useRef(initial) { const i = cursor++; return cells[i] ??= { current: initial }; },
+    useId() { const i = cursor++; return `test-id-${i}`; },
     useMemo(fn, deps) { const i = cursor++; if (changed(cells[i]?.deps, deps)) cells[i] = { deps, value: fn() }; return cells[i].value; },
     useEffect(fn, deps) { const i = cursor++; if (changed(cells[i]?.deps, deps)) { cells[i] = { deps }; pending.push(() => { cleanups[i]?.(); cleanups[i] = fn(); }); } },
   };
@@ -23,7 +24,7 @@ async function load(fetcher = async () => Response.json(page()), React = hooks()
   let registration;
   const code = await readFile(sourcePath, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
   vm.runInNewContext(code, { window: { __ModuleLoader__: { load(value) { registration = value; } } }, fetch: fetcher, AbortController, TextDecoder, TextEncoder, Uint8Array, Error, RangeError, console });
-  assert.equal(registration?.id, '@local/dsh-ptc-disk-history', 'the browser artifact must register its planned package id');
+  assert.equal(registration?.id, '@local/dsh-session-memory-manager', 'the browser artifact must register its planned package id');
   return registration.factory(name => { assert.equal(name, 'react'); return React; });
 }
 function nodes(node) { return !node || typeof node !== 'object' ? [] : [node, ...(node.props?.children ?? []).flatMap(nodes)]; }
@@ -164,7 +165,7 @@ test('formal slot registration binds the read key and both locale dictionaries i
   const dispose = effect();
   assert.equal(renderer, mod.ReadRow);
   assert.deepEqual(JSON.parse(JSON.stringify(events)), [
-    ['owner', 'tool.call.toolview'], ['slot', 'tool.call.toolview', 'read', 'ptc-disk-history'], ['locale', 'ptc-disk-history', ['zh', 'en']],
+    ['owner', 'tool.call.toolview'], ['slot', 'tool.call.toolview', 'read', 'ptc-disk-history'], ['locale', 'session-memory-controller', ['en', 'zh']],
   ]);
   dispose(); assert.deepEqual(events.at(-1), ['locale-disposed']);
 });
@@ -206,27 +207,74 @@ test('plugin manager row config registers idle form and saves selected value wit
   const runtime = hooks();
   const mod = await load(undefined, runtime.React);
   let View, registered, injectOwner;
+  const localeEvents = [];
   mod.apply({
-    effect(fn) { fn(); }, locale: { register() { return () => {}; } },
+    effect(fn) { fn(); }, locale: { register(namespace, dictionaries) { localeEvents.push({ namespace, dictionaries }); return () => {}; } },
     slots: { inject(owner, fn) { if (owner === 'plugins.row.config') injectOwner = owner; fn(); }, register(options, component) { if (options.name === 'plugins.row.config') { registered = options; View = component; } return () => {}; } },
   });
   assert.equal(injectOwner, 'plugins.row.config');
   assert.equal(registered.key, '@local/dsh-session-memory-manager#session-memory-controller');
   assert.equal(registered.locale, 'session-memory-controller');
+  const enLocale = JSON.parse(await readFile(new URL('../locale/en.json', import.meta.url), 'utf8'))['session-memory-controller'];
+  const zhLocale = JSON.parse(await readFile(new URL('../locale/zh.json', import.meta.url), 'utf8'))['session-memory-controller'];
+  assert.deepEqual(JSON.parse(JSON.stringify(localeEvents.find(event => event.namespace === 'session-memory-controller').dictionaries.en)), enLocale);
+  assert.deepEqual(JSON.parse(JSON.stringify(localeEvents.find(event => event.namespace === 'session-memory-controller').dictionaries.zh)), zhLocale);
   let mutation;
   const form = { state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision: 12, writable: true }, mutate(ops, revision) { mutation = { ops, revision }; return Promise.resolve(true); } };
-  let tree = runtime.render(View, { view: 'summary' });
-  assert.equal(nodes(tree).find(n => n.type === 'span')?.props.children.join(''), 'Idle session memory reclaim');
-  tree = runtime.render(View, { view: 'page', form });
+  const slotT = key => ({ idleSummary: 'Localized idle reclaim', idleDescription: 'Localized description', off: 'Disabled', minute: '{minutes} min', save: 'Store', saving: 'Storing…', saved: 'Stored', refused: 'Refused', failedSave: 'Failed', unavailableConfig: 'Unavailable', loadingConfig: 'Loading' }[key] ?? key);
+  let tree = runtime.render(View, { view: 'summary', t: slotT });
+  assert.equal(nodes(tree).find(n => n.type === 'span')?.props.children.join(''), 'Localized idle reclaim');
+  tree = runtime.render(View, { view: 'page', form, t: slotT });
   const select = nodes(tree).find(n => n.type === 'select');
   assert.ok(select);
   assert.deepEqual(select.props.children.map(option => option.props.value), ['0', '1', '5', '15']);
   assert.equal(select.props.value, '5');
   select.props.onChange({ target: { value: '15' } });
-  tree = runtime.render(View, { view: 'page', form });
+  tree = runtime.render(View, { view: 'page', form, t: slotT });
   const save = nodes(tree).find(n => n.type === 'button' && n.props['data-action'] === 'save-idle-reclaim');
   save.props.onClick(); await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(mutation)), { ops: [{ op: 'set', path: ['idleReclaimMinutes'], value: 15 }], revision: 12 });
+  runtime.unmount();
+});
+
+
+
+test('row config preserves draft across wrapper churn and fences duplicate pending saves by revision', async () => {
+  const runtime = hooks(); const mod = await load(undefined, runtime.React); let View;
+  mod.apply({ effect(fn) { fn(); }, locale: { register() { return () => {}; } }, slots: { inject(_owner, fn) { fn(); }, register(options, component) { if (options.name === 'plugins.row.config') View = component; return () => {}; } } });
+  let settle; const calls = [];
+  const makeForm = revision => ({ state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision, writable: true }, mutate(ops, expected) { calls.push({ ops, expected }); return new Promise(resolve => { settle = resolve; }); } });
+  const t = key => key;
+  let tree = runtime.render(View, { view: 'page', form: makeForm(31), t });
+  nodes(tree).find(node => node.type === 'select').props.onChange({ target: { value: '15' } });
+  tree = runtime.render(View, { view: 'page', form: makeForm(31), t });
+  assert.equal(nodes(tree).find(node => node.type === 'select').props.value, '15');
+  const save = nodes(tree).find(node => node.type === 'button' && node.props['data-action'] === 'save-idle-reclaim');
+  save.props.onClick(); save.props.onClick();
+  assert.equal(calls.length, 1);
+  assert.equal(nodes(runtime.render(View, { view: 'page', form: makeForm(32), t })).find(node => node.type === 'button' && node.props['data-action'] === 'save-idle-reclaim').props.disabled, true);
+  settle(false); await flush();
+  tree = runtime.render(View, { view: 'page', form: makeForm(32), t });
+  assert.equal(nodes(tree).some(node => node.props?.['data-status'] === 'saved'), false);
+  assert.equal(nodes(tree).some(node => node.props?.['data-status'] === 'stale'), true);
+  assert.equal(nodes(tree).find(node => node.type === 'select').props.value, '5', 'new Host revision must replace stale draft after refusal');
+  runtime.unmount();
+});
+
+
+
+
+test('accepted revision stays locked until pending mutation settles and then reports saved', async () => {
+  const runtime = hooks(); const mod = await load(undefined, runtime.React); let View; let settle;
+  mod.apply({ effect(fn) { fn(); }, locale: { register() { return () => {}; } }, slots: { inject(_owner, fn) { fn(); }, register(options, component) { if (options.name === 'plugins.row.config') View = component; return () => {}; } } });
+  const t = key => key; const pending = { state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision: 12, writable: true }, mutate() { return new Promise(resolve => { settle = resolve; }); } };
+  let tree = runtime.render(View, { view: 'page', form: pending, t }); nodes(tree).find(node => node.type === 'select').props.onChange({ target: { value: '15' } });
+  tree = runtime.render(View, { view: 'page', form: pending, t }); nodes(tree).find(node => node.type === 'button' && node.props['data-action'] === 'save-idle-reclaim').props.onClick();
+  const accepted = { state: { status: 'ready', value: { idleReclaimMinutes: 15 }, revision: 13, writable: true }, mutate: pending.mutate };
+  tree = runtime.render(View, { view: 'page', form: accepted, t });
+  assert.equal(nodes(tree).find(node => node.type === 'button' && node.props['data-action'] === 'save-idle-reclaim').props.disabled, true);
+  settle(true); await flush(); tree = runtime.render(View, { view: 'page', form: accepted, t });
+  assert.equal(nodes(tree).some(node => node.props?.['data-status'] === 'saved'), true);
   runtime.unmount();
 });
 
@@ -234,12 +282,18 @@ test('row config refuses stale or unavailable forms without claiming saved', asy
   const runtime = hooks(); const mod = await load(undefined, runtime.React); let View;
   mod.apply({ effect(fn) { fn(); }, locale: { register() { return () => {}; } }, slots: { inject(_owner, fn) { fn(); }, register(options, component) { if (options.name === 'plugins.row.config') View = component; return () => {}; } } });
   let calls = 0;
+  const slotT = key => key;
   const form = { state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision: 4, writable: true }, mutate() { calls++; return Promise.resolve(false); } };
   let tree = runtime.render(View, { view: 'page', form });
   const select = nodes(tree).find(n => n.type === 'select'); select.props.onChange({ target: { value: '1' } });
-  tree = runtime.render(View, { view: 'page', form }); nodes(tree).find(n => n.type === 'button' && n.props['data-action'] === 'save-idle-reclaim').props.onClick(); await flush();
-  tree = runtime.render(View, { view: 'page', form });
+  tree = runtime.render(View, { view: 'page', form, t: slotT }); nodes(tree).find(n => n.type === 'button' && n.props['data-action'] === 'save-idle-reclaim').props.onClick(); await flush();
+  tree = runtime.render(View, { view: 'page', form, t: slotT });
   assert.equal(calls, 1); assert.equal(nodes(tree).some(n => n.props?.['data-status'] === 'saved'), false);
+  const changed = { state: { status: 'ready', value: { idleReclaimMinutes: 0 }, revision: 5, writable: true }, mutate() { throw new Error('must not write'); } };
+  tree = runtime.render(View, { view: 'page', form: changed, t: slotT });
+  tree = runtime.render(View, { view: 'page', form: changed, t: slotT });
+  assert.equal(nodes(tree).find(n => n.type === 'select').props.value, '0');
+
   tree = runtime.render(View, { view: 'page', form: { state: { status: 'unavailable', value: undefined, revision: undefined, writable: false }, mutate() { throw new Error('must not write'); } } });
   assert.ok(nodes(tree).some(n => n.props?.role === 'status'));
   runtime.unmount();
