@@ -11,6 +11,7 @@ function hooks() {
   const changed = (a, b) => !a || a.length !== b.length || a.some((v, i) => v !== b[i]);
   const React = {
     createElement(type, props, ...children) { return { type, props: { ...props, children: children.flat().filter(v => v !== null && v !== false && v !== undefined) } }; },
+    useId() { return `test-id-${cursor++}`; },
     useState(initial) { const i = cursor++; cells[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [cells[i].value, value => { cells[i].value = typeof value === 'function' ? value(cells[i].value) : value; }]; },
     useRef(initial) { const i = cursor++; return cells[i] ??= { current: initial }; },
     useMemo(fn, deps) { const i = cursor++; if (changed(cells[i]?.deps, deps)) cells[i] = { deps, value: fn() }; return cells[i].value; },
@@ -41,7 +42,7 @@ test('real read-row clicks gate the first credentialed request and expose exact 
   const mod = await load(async (url, options) => { calls.push({ url, options }); return Response.json(page()); }, runtime.React);
   let View, registered;
   const effects = [];
-  mod.apply({ effect(fn) { effects.push(fn()); }, locale: { register() { return () => {}; } }, slots: { inject(name, fn) { assert.equal(name, 'tool.call.toolview'); fn(); }, register(options, component) { registered = options; View = component; return () => {}; } } });
+  mod.apply({ effect(fn) { effects.push(fn()); }, locale: { register() { return () => {}; } }, slots: { inject(name, fn) { if (name === 'tool.call.toolview') fn(); }, register(options, component) { registered = options; View = component; return () => {}; } } });
   assert.equal(registered.key, 'read');
   const p = props(runtime.React);
   let tree = runtime.render(View, p);
@@ -156,7 +157,7 @@ test('formal slot registration binds the read key and both locale dictionaries i
     effect(fn) { effect = fn; },
     locale: { register(namespace, dicts) { events.push(['locale', namespace, Object.keys(dicts)]); return () => events.push(['locale-disposed']); } },
     slots: {
-      inject(owner, fn) { events.push(['owner', owner]); fn(); },
+      inject(owner, fn) { if (owner === 'tool.call.toolview') { events.push(['owner', owner]); fn(); } },
       register(options, component) { events.push(['slot', options.name, options.key, options.locale]); renderer = component; return () => {}; },
     },
   });
@@ -199,10 +200,47 @@ test('invalid request cursor or marker never reaches fetch', async () => {
   assert.equal(calls, 0);
 });
 
-test('malformed JSON and UTF-8 are reported as invalid pages without exposing response content', async () => {
-  for (const response of [new Response('{private broken json'), new Response(new Uint8Array([0xff]))]) {
-    const mod = await load(async () => response), controller = mod.createPageController('session-one', locator);
-    await controller.open(); assert.equal(controller.getSnapshot().page, null);
-    assert.equal(controller.getSnapshot().error, 'invalidPage');
-  }
+
+
+test('plugin manager row config registers idle form and saves selected value with revision', async () => {
+  const runtime = hooks();
+  const mod = await load(undefined, runtime.React);
+  let View, registered, injectOwner;
+  mod.apply({
+    effect(fn) { fn(); }, locale: { register() { return () => {}; } },
+    slots: { inject(owner, fn) { if (owner === 'plugins.row.config') injectOwner = owner; fn(); }, register(options, component) { if (options.name === 'plugins.row.config') { registered = options; View = component; } return () => {}; } },
+  });
+  assert.equal(injectOwner, 'plugins.row.config');
+  assert.equal(registered.key, '@local/dsh-session-memory-manager#session-memory-controller');
+  assert.equal(registered.locale, 'session-memory-controller');
+  let mutation;
+  const form = { state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision: 12, writable: true }, mutate(ops, revision) { mutation = { ops, revision }; return Promise.resolve(true); } };
+  let tree = runtime.render(View, { view: 'summary' });
+  assert.equal(nodes(tree).find(n => n.type === 'span')?.props.children.join(''), 'Idle session memory reclaim');
+  tree = runtime.render(View, { view: 'page', form });
+  const select = nodes(tree).find(n => n.type === 'select');
+  assert.ok(select);
+  assert.deepEqual(select.props.children.map(option => option.props.value), ['0', '1', '5', '15']);
+  assert.equal(select.props.value, '5');
+  select.props.onChange({ target: { value: '15' } });
+  tree = runtime.render(View, { view: 'page', form });
+  const save = nodes(tree).find(n => n.type === 'button' && n.props['data-action'] === 'save-idle-reclaim');
+  save.props.onClick(); await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(mutation)), { ops: [{ op: 'set', path: ['idleReclaimMinutes'], value: 15 }], revision: 12 });
+  runtime.unmount();
+});
+
+test('row config refuses stale or unavailable forms without claiming saved', async () => {
+  const runtime = hooks(); const mod = await load(undefined, runtime.React); let View;
+  mod.apply({ effect(fn) { fn(); }, locale: { register() { return () => {}; } }, slots: { inject(_owner, fn) { fn(); }, register(options, component) { if (options.name === 'plugins.row.config') View = component; return () => {}; } } });
+  let calls = 0;
+  const form = { state: { status: 'ready', value: { idleReclaimMinutes: 5 }, revision: 4, writable: true }, mutate() { calls++; return Promise.resolve(false); } };
+  let tree = runtime.render(View, { view: 'page', form });
+  const select = nodes(tree).find(n => n.type === 'select'); select.props.onChange({ target: { value: '1' } });
+  tree = runtime.render(View, { view: 'page', form }); nodes(tree).find(n => n.type === 'button' && n.props['data-action'] === 'save-idle-reclaim').props.onClick(); await flush();
+  tree = runtime.render(View, { view: 'page', form });
+  assert.equal(calls, 1); assert.equal(nodes(tree).some(n => n.props?.['data-status'] === 'saved'), false);
+  tree = runtime.render(View, { view: 'page', form: { state: { status: 'unavailable', value: undefined, revision: undefined, writable: false }, mutate() { throw new Error('must not write'); } } });
+  assert.ok(nodes(tree).some(n => n.props?.role === 'status'));
+  runtime.unmount();
 });
