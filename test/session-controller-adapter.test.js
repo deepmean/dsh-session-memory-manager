@@ -25,7 +25,8 @@ function makeBase({onInit, frames = [{type:'snapshot', cursor:7}, {type:'event',
   constructor(ctx, config, internals) { this.ctx=ctx; this.baseArgs=[ctx,config,internals]; }
   async [cordis.Service.init]() { if (onInit) await onInit(this); }
   async *follow(request, signal) { this.followArgs=[request,signal]; yield* frames; }
-  resolveAgent(sessionId) { return this.agents.resolveAgent(sessionId); }
+  create(request) { return this._create ? this._create(request) : Promise.resolve({sessionId:request?.sessionId??'created'}); }
+   resolveAgent(sessionId) { return this.agents.resolveAgent(sessionId); }
    prompt(request) { this.promptArgs=request; return 'prompt-result'; }
   updateQueue(request) { this.queueArgs=request; return 'queue-result'; }
   cancel(request) { this.cancelArgs=request; return 'cancel-result'; }
@@ -221,6 +222,30 @@ test('public resolver retires a borrowed Agent from idle tracking once', async (
  await service[cordis.Service.init]();
  assert.equal((await service.resolveAgent(agent.id)).agent,agent);
  assert.equal(manager.calls.filter(call=>call[0]==='forget').length,1);
+});
+
+test('minted-ID create refreshes the tracked Agent after the scoped registry create completes', async () => {
+ const create=await adapterFactory();
+ const id='minted-session';
+ const agent={id,session:{header:{id}}};
+ const handle={agent,dispose(){}};
+ const registry={async create(options){assert.equal(options.sessionId,id);return handle;},async resume(){throw new Error('unused');},get(){return agent;}};
+ const manager=managerStub();
+ const ctx=contextWithAgents(registry);
+ const {Base}=makeBase({onInit:service=>{
+  const scoped=service.ctx.agents;
+  service._create=async()=>{await scoped.create({sessionId:id});return {sessionId:id};};
+ }});
+ const Adapter=create(Base,cordis,{validateInstalledShape:false,manager});
+ const service=new Adapter(ctx,{});
+ await service[cordis.Service.init]();
+ assert.deepEqual(await service.create({}),{sessionId:id});
+ assert.equal(manager.calls.some(call=>call[0]==='track' && call[1].handle===handle),true);
+ const begin=manager.calls.findIndex(call=>call[0]==='begin'&&call[1]===id);
+  const track=manager.calls.findIndex(call=>call[0]==='track'&&call[1].handle===handle);
+  const end=manager.calls.findIndex(call=>call[0]==='end'&&call[1]===id);
+  assert.ok(begin>=0&&begin<track&&track<end,'the inner Registry.create lease spans exact-handle tracking');
+  assert.deepEqual(manager.calls.filter(call=>call[0]==='activity'),[['activity',id]]);
 });
 
 test('factory-injected manager ignores subagent-origin AgentHandles', async () => {
