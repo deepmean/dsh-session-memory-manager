@@ -14,7 +14,7 @@ Repository: `deepmean/dsh-session-memory-manager`
 
 ## Evidence statement
 
-After the concurrent implementation changes settled, the full isolated package suite passed 124/124 and `scripts/check.mjs` passed. A separate synthetic presentation scan preserved a 4 KiB preview for approximately 32.1 MB of PTC metadata, without writing an external payload file. This is synthetic/isolated evidence only; no actual-Host cold start, live GUI rendering, real-profile session scan, or multi-day trial has been completed.
+After the concurrent implementation changes settled, the full isolated package suite passed 125/125 and `scripts/check.mjs` passed. A separate synthetic presentation scan preserved a 4 KiB preview for approximately 32.1 MB of PTC metadata, without writing an external payload file. This is synthetic/isolated evidence only; no actual-Host cold start, live GUI rendering, real-profile session scan, or multi-day trial has been completed.
 
 ## Scope
 

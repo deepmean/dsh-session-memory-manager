@@ -19,7 +19,7 @@
 
 当前工作树已完成：
 
-- 全量隔离 Node 测试：`124/124` 通过，进程正常退出。
+- 全量隔离 Node 测试：`125/125` 通过，进程正常退出。
 - `scripts/check.mjs`：通过运行时语法、显式导出、API 基线、locale 元数据和 SVG 检查。
 - Adapter 与真实安装版 AgentLoop/Registry 原生生命周期：`15/15` 通过；包含被动 follow、TTL 回收、日志 SHA/长度保持、同一 durable Session 恢复、首次 prompt 和重复 request 去重。
 - Plugin Manager Client 配置：`21/21` 通过；包含 wrapper churn、CAS revision、重复保存和 Host 先发布新 revision 的情况。
