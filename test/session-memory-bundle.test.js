@@ -172,6 +172,38 @@ function provideControllerDependencies(ctx, Base, onProjectionRegistered = () =>
   for (const name of Base.inject) ctx.provide(name, services[name] ?? {});
 }
 
+test('version gate admits mocked newer DSH releases above the API baseline', async () => {
+  const module = await import('../lib/session-controller-plugin.js');
+  const cordis = require('@deepseek-ai/cordis');
+  const {SessionController} = require('@deepseek-ai/dsh-api-session-controller');
+  const {Loader} = require('@deepseek-ai/cordis-plugin-loader');
+  const ctx = new cordis.Context();
+  ctx.baseUrl = pathToFileURL(path.join(process.env.DSH_INSTALL_DIR, path.sep)).href;
+  class Replacement extends cordis.Service {
+    constructor(child) { super(child, 'sessionController'); }
+    [cordis.Service.init]() {}
+  }
+  try {
+    await ctx.plugin(Loader).await();
+    ctx.loader.builtins.memory = {apply: (scope, config) => module.createSessionMemoryControllerPlugin(scope, config, {
+      loadHost: async () => ({cordis, Base: SessionController, versions: {
+        dsh: '0.2.3-alpha.2', controller: '0.2.3-alpha.2', agentLoop: '0.2.3-alpha.2',
+      }}),
+      createAdapter: () => Replacement,
+    })};
+    provideControllerDependencies(ctx, SessionController);
+    const patch = await readPatch();
+    const native = patch.find(row => row.id === 'session-controller');
+    const replacement = patch.flatMap(row => row.insert ?? []).find(row => row.id === 'session-memory-controller');
+    await ctx.loader.create({...native, name: '@deepseek-ai/dsh-api-session-controller'});
+    await ctx.loader.create({...replacement, name: 'cordis:memory'});
+    await ctx.loader.await();
+    assert.ok(ctx.get('sessionController') instanceof Replacement);
+    assert.equal(ctx.get('dshSessionMemoryNativeFallback', false), undefined);
+  } finally {
+    await ctx.fiber.dispose();
+  }
+});
 test('the CLI-relative replacement retains its service across Loader idle-setting updates', async t => {
   const installDir = process.env.DSH_INSTALL_DIR;
   const oldArg = process.argv[1];
@@ -228,7 +260,7 @@ test('the CLI-relative replacement retains its service across Loader idle-settin
 });
 
 for (const [mode, overrides] of [
-  ['failed-init', {}], ['unsupported', {agentLoop: '0.2.2-rc.6'}],
+  ['failed-init', {}], ['unsupported', {agentLoop: '0.2.2-rc.4'}],
 ]) {
   test(`real Loader starts native exactly once on ${mode} boot`, {timeout: 5000}, async () => {
     const module = await import('../lib/session-controller-plugin.js');
