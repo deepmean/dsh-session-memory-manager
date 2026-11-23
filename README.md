@@ -1,6 +1,6 @@
 # DSH 会话内存管理器
 
-`@local/dsh-session-memory-manager@0.1.0-alpha.3` 是本地试用包，包含 alpha.2 的 PTC 原日志分页和 Web 会话内存管理。它不会删除、裁剪或外置会话日志，也不会恢复旧的独立查看页。
+`@local/dsh-session-memory-manager@0.1.0-alpha.4` 是本地试用包，包含 DSH alpha.2 的 PTC 原日志分页、Web 会话内存管理，以及针对 alpha.2 Query/native JSONL 导出的兼容修复。它不会删除、裁剪或外置会话日志，也不会恢复旧的独立查看页。
 
 ## 会话内存
 
@@ -33,6 +33,6 @@
 
 会话控制器适配的最低版本基线为 DSH `0.2.2-rc.5`；更高版本会继续做安装版 API 结构校验，低于基线、结构不兼容或替换初始化失败时回退到原生控制器并保留原生浏览器模块。PTC 存储适配仍需按安装版 shape 校验；Release changelog 和版本范围本身不代表每个后续版本都已完成现场验收。
 
-请在有维护窗口时完整退出使用目标 profile 的 DSH Host，通过 DSH 官方插件管理方式从本地目录安装新版并移除旧包的启用项，随后冷启动。不要在运行中的 Host 热切换，也不要同时启用 alpha.2 和 alpha.3。回滚同样先退出 Host，再切回 alpha.2 或恢复原生配置。无需移动或修改会话文件。
+请在有维护窗口时完整退出使用目标 profile 的 DSH Host，通过 DSH 官方插件管理方式从本地目录安装新版并移除旧包的启用项，随后冷启动。不要在运行中的 Host 热切换，也不要同时启用 alpha.4 和旧的 alpha.3。回滚同样先退出 Host，再切回旧插件或恢复原生配置。无需移动或修改会话文件。
 
 验证命令和实现细节见 [DEVELOPMENT.md](DEVELOPMENT.md)，许可和来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。当前开发工作树不等于已经切换的 Host；真实 GUI 和冷启动验收独立进行。

@@ -22,10 +22,10 @@ async function readPatch() {
   return yaml.load(await fs.readFile(path.join(root, 'cordis.patch.yml'), 'utf8'), {schema: patchSchema});
 }
 
-test('alpha3 is a private single bundle with the renamed session controller export', async () => {
+test('alpha4 is a private single bundle with the renamed session controller export', async () => {
   const manifest = await readJson('package.json');
   assert.equal(manifest.name, '@local/dsh-session-memory-manager');
-  assert.equal(manifest.version, '0.1.0-alpha.3');
+  assert.equal(manifest.version, '0.1.0-alpha.4');
   assert.equal(manifest.private, true);
   assert.deepEqual(manifest.repository, {
     type: 'git',

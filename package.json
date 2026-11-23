@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-session-memory-manager",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "private": true,
   "description": "Session-memory retention with bounded PTC history and native-controller fallback.",
   "type": "module",

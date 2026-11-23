@@ -1,7 +1,7 @@
 # Task 4c report: documentation and metadata cleanup
 
 Date: 2026-11-22
-Package: `@local/dsh-session-memory-manager@0.1.0-alpha.3`
+Package: `@local/dsh-session-memory-manager@0.1.0-alpha.4`
 Repository: `deepmean/dsh-session-memory-manager`
 
 ## Changes
