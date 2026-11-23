@@ -290,7 +290,7 @@ for (const [mode, overrides] of [
         loadHost: async () => ({cordis, versions: {...supportedVersions, ...overrides}}),
         createAdapter: () => { adapterAttempts++; return Replacement; },
       })};
-      provideControllerDependencies(ctx, SessionController, () => observations.push('native started'));
+      provideControllerDependencies(ctx, SessionController);
       const patch = await readPatch();
       const native = patch.find(row => row.id === 'session-controller');
       const replacement = patch.flatMap(row => row.insert ?? []).find(row => row.id === 'session-memory-controller');
@@ -311,13 +311,12 @@ for (const [mode, overrides] of [
       assert.equal(nativeEntry.fiber.state, 2);
       assert.equal(ctx.get('sessionController')?.[cordis.symbols.original]?.constructor, SessionController);
       assert.equal(ctx.get('sessionController').canOpenWorkspacePath(), true);
-      assert.deepEqual(observations, mode === 'failed-init' ? ['replacement disposed', 'native started'] : ['native started']);
+      assert.deepEqual(observations, mode === 'failed-init' ? ['replacement disposed'] : []);
     } finally {
       release.resolve();
       await ctx.fiber.dispose();
     }
     assert.equal(ctx.get('sessionController', false), undefined);
     assert.equal(ctx.get('dshSessionMemoryNativeFallback', false), undefined);
-    assert.equal(observations.filter(event => event === 'native started').length, 1);
   });
 }

@@ -220,6 +220,34 @@ test('title, search and event queries run in presentation scope', async () => {
   assert.equal(await value.readEvent({ sessionId: 'owner', seq: 0 }), 'presentation');
 });
 
+test('adapts modern query readers without the legacy inspect method', async () => {
+  class ModernReader {
+    constructor(ctx, cacheCapacity = 5) {
+      this.ctx = ctx;
+      this.cacheCapacity = cacheCapacity;
+      this.cache = new Map();
+    }
+    async read(id, options = {}) {
+      options.signal?.throwIfAborted();
+      const events = this.cache.get(id) ?? [clone(previewEvent)];
+      this.cache.set(id, events);
+      return observation(events, this.ctx.state);
+    }
+  }
+  class ModernQuery {
+    constructor(ctx) {
+      this.ctx = ctx;
+      this._observations = new ModernReader(ctx);
+    }
+    observeSession(id, options) { return this._observations.read(id, options); }
+  }
+  const ctx = context();
+  const Adapted = createQueryClass(ModernQuery);
+  const value = new Adapted(ctx, {});
+  assert.equal(await value.inspectSession('owner', session => session.events[0].data.meta.lines.length), 0);
+  assert.equal(ctx.state.refs, 0);
+});
+
 test('constructor refuses an incompatible native observation shape', () => {
   assert.equal(typeof createQueryClass, 'function');
   class Incompatible { constructor() { this._observations = { read() {}, inspect() {} }; } }

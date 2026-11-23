@@ -30,12 +30,15 @@ export async function prepareNative({dshDir,outputDir}={}){
   throw new Error(`unsupported native import binding for ${spec}`);
  }).replace(/\bimport\("([^"\n]+)"\)/g,(expression,spec)=>spec.startsWith('node:')?expression:`__ptcHostImport(${JSON.stringify(spec)})`);
  if(importCount<8)throw new Error('incomplete native dependency resolution');
+ const exportedNames=new Set([...rewritten.matchAll(/\bexport\s*\{([^}]*)\}/gs)].flatMap(([,specifiers])=>specifiers.split(',').map(specifier=>specifier.trim().split(/\s+as\s+/).at(-1))));
+ const adapterExports=['JsonlSessionPersistence','JsonlBackendTracker'].filter(name=>!exportedNames.has(name));
  const sha256=createHash('sha256').update(source).digest('hex');
  const worker=await fs.readFile(path.join(nativeDir,'lib','worker.cjs'),'utf8');
  const workerSha256=createHash('sha256').update(worker).digest('hex');
  const proof={upstream:'https://github.com/deepseek-ai/deepseek-harness',version:manifest.version,installedRoot:dshDir,package:'@deepseek-ai/dsh-session-persistence-jsonl',sha256,workerSha256,modifications:['resolve imports from the same host installation','export existing native classes for an explicit isolated adapter']};
  await fs.mkdir(outputDir,{recursive:true,mode:0o700});
- await writeGenerated(path.join(outputDir,'jsonl.js'),generated+`import {hostImport as __ptcHostImport} from '../host-libs.js';\n`+rewritten+'\nexport { JsonlSessionPersistence, JsonlBackendTracker };\n');
+ const adapterExportLine=adapterExports.length?`\nexport { ${adapterExports.join(', ')} };`:'';
+ await writeGenerated(path.join(outputDir,'jsonl.js'),generated+`import {hostImport as __ptcHostImport} from '../host-libs.js';\n`+rewritten+adapterExportLine+'\n');
  const cjsAnchor=`const __ptcProof = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname,'native-source.json'),'utf8'));\nrequire = require('node:module').createRequire(require('node:path').join(process.env.DSH_INSTALL_DIR || __ptcProof.installedRoot,'package.json'));\n`;
  await writeGenerated(path.join(outputDir,'worker.cjs'),generated+cjsAnchor+worker);
  await fs.writeFile(path.join(outputDir,'native-source.json'),JSON.stringify(proof,null,2)+'\n',{mode:0o600});
