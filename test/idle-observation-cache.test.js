@@ -196,6 +196,16 @@ test('rejects a lookalike entry missing the pinned DSH ownership fields', async 
   assert.equal(f.cache.metrics().trackedEntries,0);
 });
 
+test('a failed cold read that leaves a cache entry is eventually evicted', async () => {
+  const f=fixture({idleMs:10});f.reader.cache.clear();
+  const finish=f.cache.beginRead('owner');
+  const entry=dshEntry('failed-r1');f.reader.cache.set('owner',entry);
+  finish();
+  assert.equal(f.clock.pending(),1,'failed read completion rearms eviction for the inserted entry');
+  await f.clock.advance(10);
+  assert.equal(f.reader.cache.size,0);
+});
+
 test('clear cancels timers and leaves borrowed leases usable', () => {
   const f = fixture({ idleMs: 20 });
   const borrowed = f.cache.wrap('owner', f.leaseFor());
@@ -204,6 +214,10 @@ test('clear cancels timers and leaves borrowed leases usable', () => {
   f.cache.clear();
   assert.equal(f.clock.pending(), 0);
   assert.equal(f.reader.cache.size, 0);
+  const late=dshEntry('late-r1');
+  f.reader.cache.set('owner',late);
+  f.cache.clear();
+  assert.equal(f.reader.cache.size,0,'idempotent teardown clear sweeps entries inserted by late reads');
   assert.equal(retained.events[0].data.content, 'fixture');
   retained[Symbol.dispose]();
 });

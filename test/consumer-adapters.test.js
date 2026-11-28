@@ -19,7 +19,7 @@ const clone = value => structuredClone(value);
 function context({ adapted = true, gate } = {}) {
   const mode = new AsyncLocalStorage();
   const disposers = [];
-  const state = { refs: 0, restored: 0, reads: [], gate, liveEvents: undefined };
+  const state = { refs: 0, restored: 0, reads: [], readerInstances: [], gate, failAfterRead:undefined, liveEvents: undefined };
   const backend = { identity: Symbol('persistence'),
     diskController: { async restoreEvent(event, { ownerId, signal } = {}) {
       assert.equal(ownerId, 'owner'); signal?.throwIfAborted(); state.restored++;
@@ -66,6 +66,7 @@ function observation(entry, state) {
 class ReaderFixture {
   constructor(ctx, cacheCapacity = 5) {
     this.ctx = ctx; this.cacheCapacity = cacheCapacity; this.cache = new Map();
+    ctx.state.readerInstances.push(this);
   }
   async read(id, options = {}) {
     options.signal?.throwIfAborted();
@@ -78,6 +79,7 @@ class ReaderFixture {
       this.cache.set(id, entry);
       while (this.cache.size > this.cacheCapacity) this.cache.delete(this.cache.keys().next().value);
       this.ctx.state.reads.push(mode);
+      if(this.ctx.state.failAfterRead)throw this.ctx.state.failAfterRead;
     }
     return observation(entry, this.ctx.state);
   }
@@ -234,6 +236,33 @@ test('an observation completing after unload is released rather than handed out'
   await inGate; ctx.dispose(); release();
   await assert.rejects(pending, /closed|disposed/i);
   assert.equal(ctx.state.refs, 0);
+  assert.equal(ctx.state.readerInstances[1].cache.size,0,'late presentation read is swept after teardown');
+});
+
+test('late full observation completion does not repopulate the native cache after unload', async () => {
+  let release, started;
+  const inGate=new Promise(resolve=>{started=resolve;});
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {ctx,value}=query({gate:async mode=>{if(mode==='full'){started();await gate;}}});
+  const pending=value.observeFullSession('owner');
+  await inGate;
+  ctx.dispose();
+  release();
+  await assert.rejects(pending,/closed|disposed/i);
+  assert.equal(value._observations.cache.size,0,'late full read must not leave an untracked native cache entry');
+});
+
+test('late rejected observation after unload clears native cache writes', async () => {
+  let release,started;
+  const inGate=new Promise(resolve=>{started=resolve;});
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {ctx,value}=query({gate:async()=>{started();await gate;}});
+  const failure=new Error('late post-load failure');
+  ctx.state.failAfterRead=failure;
+  const pending=value.observeSession('owner');
+  await inGate;ctx.dispose();release();
+  await assert.rejects(pending,error=>error===failure);
+  assert.equal(ctx.state.readerInstances[1].cache.size,0,'failed late presentation read cannot leave a cache-only Session graph');
 });
 
 test('title, search and event queries run in presentation scope', async () => {

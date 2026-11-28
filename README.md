@@ -1,6 +1,6 @@
 # DSH 会话内存管理器
 
-`@local/dsh-session-memory-manager@0.1.0-alpha.5` 是本地试用包，包含 DSH alpha.2 的 PTC 原日志分页、Web 会话内存管理，以及 Query prepared-session 和 worker 磁盘索引的空闲回收。它不会删除、裁剪或外置会话日志，也不会恢复旧的独立查看页。
+`@local/dsh-session-memory-manager@0.1.0-alpha.5` 是本地试用包，包含 DSH alpha.2 的 PTC 原日志分页、Web 会话内存管理，以及 Query prepared-session 与 worker 磁盘索引的空闲回收。原始会话日志保持不变；缓存超时后重新查看会重读/重扫日志，大会话会有冷读峰值，V8/OS RSS 也不保证立即下降。
 
 ## 会话内存
 
@@ -19,7 +19,8 @@
 
 当前工作树已完成：
 
-- 全量隔离 Node 测试：`128/128` 通过，进程正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`。
+- 全量隔离 Node 测试：`143/143` 通过，进程正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`。
+- Query cache idle eviction 与 worker index expiry：覆盖 final/nested leases、native LRU stale state、并发 cold reads、shape fail-safe、Query teardown late-read cleanup（含失败冷读）、PTC index 到期后重扫及源日志哈希不变。
 - 针对 alpha2 的 Query reader、session list projection、native JSONL snapshot 和 Loader fallback：focused tests 全部通过；其中实际 native query/list 与 snapshot 集成 `15/15`，Controller/AgentLoop 生命周期 `16/16`。
 - `scripts/check.mjs`：通过运行时语法、显式导出、API 基线、locale 元数据和 SVG 检查。
 - Adapter 与真实安装版 AgentLoop/Registry 原生生命周期：`16/16` 通过；包含被动 follow、TTL 回收、日志 SHA/长度保持、同一 durable Session 恢复、首次 prompt、重复 request 去重，以及 minted-ID create 的 registry lease/首个 activity refresh。
