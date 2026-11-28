@@ -60,6 +60,37 @@ test('explicit metadata pages reassemble exact original and keep ordinary JSON b
  }finally{await c.close();await f.cleanup();}
 });
 
+test('expires idle source indexes and rebuilds PTC pages from the unchanged log', {timeout: 10000}, async()=>{
+ assert.equal(typeof runtime.DiskPresentationController,'function');
+ const f=await nativeFixture({lineCount:4,lineLength:18000});
+ const before=await fs.readFile(f.file),beforeHash=digest(before);
+ const c=new runtime.DiskPresentationController({dshDir:process.env.DSH_INSTALL_DIR,root:f.root,sourceIdleMs:25});
+ try{
+  const stored=await c.readStoredPrefix({file:f.file,id:f.header.id,revision:'idle-index-fixture',buffer:before});
+  const marker=stored.events[8].data.meta[runtime.DISK_META_KEY];
+  assert.ok(marker);
+  const warm=await c.workerMetrics();
+  assert.equal(warm.readers,1);
+  const deadline=Date.now()+750;
+  let expired;
+  while(Date.now()<deadline){
+   expired=await c.workerMetrics();
+   if(expired.readers===0)break;
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.equal(expired?.readers,0,'idle worker source reader should expire');
+  assert.equal(expired?.indexEntries,0,'idle DiskHistoryReader locator index should be cleared');
+  assert.equal(expired?.sourceEvictions,1);
+  const page=await c.readPtcLines({sessionId:f.header.id,seq:8,token:marker.token,offset:0,limit:1,maxBytes:65536});
+  assert.equal(page.lines[0].number,f.events[8].data.meta.lines[0].number);
+  assert.equal(page.lines[0].text,f.events[8].data.meta.lines[0].text);
+  const rebuilt=await c.workerMetrics();
+  assert.equal(rebuilt.readers,1,'a valid marker rebuilds an expired reader');
+  assert.equal(rebuilt.scans,2);
+  assert.equal(digest(await fs.readFile(f.file)),beforeHash,'index eviction and rebuild never modify source log bytes');
+ }finally{await c.close();await f.cleanup();}
+});
+
 test('source snapshot mismatch and closed controller fail without altering log',async()=>{
  assert.equal(typeof runtime.DiskPresentationController,'function','presentation controller missing');
  const f=await nativeFixture();const c=new runtime.DiskPresentationController({dshDir:process.env.DSH_INSTALL_DIR,root:f.root});
