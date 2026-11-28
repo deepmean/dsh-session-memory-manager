@@ -26,6 +26,6 @@ node --test 'test/*.test.js'
 node scripts/check.mjs
 ```
 
-当前工作树证据：全量隔离测试 `143/143` 通过并正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`；`scripts/check.mjs` 通过；active Query lease、native LRU/cold-read race、teardown late-read/rejection cleanup、worker presentation/index expiry `5/5`、Adapter/native lifecycle `16/16`、Client 配置 `21/21`、Loader bundle `8/8` 均通过。测试使用隔离 Cordis 树和临时会话日志，不需要当前 profile，也不向远程模型发送请求。回收前后用日志长度、SHA-256 和 `deriveMessages()` 对比完整性；实际 Host 巡检应看在线 Agent 数与 Session 是否脱离注册表，不只看 RSS。
+当前工作树证据：全量隔离测试 `145/145` 通过并正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`；`scripts/check.mjs` 通过；active Query lease、native LRU/cold-read race、teardown late-read/rejection cleanup、worker presentation/index expiry `5/5`、Adapter/native lifecycle `16/16`、Client 配置 `21/21`、Loader bundle `8/8` 均通过。测试使用隔离 Cordis 树和临时会话日志，不需要当前 profile，也不向远程模型发送请求。回收前后用日志长度、SHA-256 和 `deriveMessages()` 对比完整性；实际 Host 巡检应看在线 Agent 数与 Session 是否脱离注册表，不只看 RSS。
 
 合成约 32.1 MB PTC 行数据的展示扫描保留 4 KiB 预览，没有创建外置 payload 文件；该测试测量的是展示路径的有界传输，不是完整 Host RSS 上限。

@@ -19,7 +19,7 @@
 
 当前工作树已完成：
 
-- 全量隔离 Node 测试：`143/143` 通过，进程正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`。
+- 全量隔离 Node 测试：`145/145` 通过，进程正常退出；测试使用当前安装的 DSH `0.2.3-alpha.2`。
 - Query cache idle eviction 与 worker index expiry：覆盖 final/nested leases、native LRU stale state、并发 cold reads、shape fail-safe、Query teardown late-read cleanup（含失败冷读）、PTC index 到期后重扫及源日志哈希不变。
 - 针对 alpha2 的 Query reader、session list projection、native JSONL snapshot 和 Loader fallback：focused tests 全部通过；其中实际 native query/list 与 snapshot 集成 `15/15`，Controller/AgentLoop 生命周期 `16/16`。
 - `scripts/check.mjs`：通过运行时语法、显式导出、API 基线、locale 元数据和 SVG 检查。
