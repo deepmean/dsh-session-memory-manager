@@ -41,8 +41,9 @@
 **Interfaces:**
 - `createIdleObservationCache(reader, options = {})` consumes a DSH-shaped reader with `cache: Map`.
 - Options: `{ idleMs = 30_000, setTimer = setTimeout, clearTimer = clearTimeout, onEviction = noop, onIncompatibleShape = noop }`.
-- Returns `{ wrap(sessionId, lease), afterInspect(sessionId), metrics(), clear() }`.
-- `wrap()` preserves observation properties and wraps `retain()`/`Symbol.dispose`; `metrics()` returns counts only: `{ entries, retainedEvents, activeLeases, pendingEvictions, evictions }`.
+- Returns `{ beginRead(sessionId), wrap(sessionId, lease), afterInspect(sessionId), metrics(), clear() }`.
+- `beginRead()` returns an idempotent completion callback; pending reads cancel the idle timer and prevent expiry until the corresponding lease is wrapped or the read fails.
+- `wrap()` preserves observation properties and wraps `retain()`/`Symbol.dispose`; live observations pass through without touching lazy event getters. `metrics()` returns counts only: `{ entries, retainedEvents, activeLeases, inFlightReads, pendingEvictions, evictions }`.
 
 - [ ] **Step 1: Write failing helper tests**
 

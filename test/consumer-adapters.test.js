@@ -39,15 +39,15 @@ function context({ adapted = true, gate } = {}) {
   return ctx;
 }
 
-function observation(events, state) {
-  state.refs++;
+function observation(entry, state) {
+  state.refs++; entry.refs++;
   let disposed = false;
   return {
     source: 'prepared', header: { id: 'owner', version: 4, createdAt: 1, isSeeded: false },
-    inheritedEventCount: 0, events, cursor: 0, revision: 'fixture-revision',
+    inheritedEventCount: 0, events: entry.events, cursor: 0, revision: entry.revision,
     projections: { asOfSeq: 0, values: { title: 'fixture' } },
-    retain() { if (disposed) throw new Error('disposed source lease'); return observation(events, state); },
-    [Symbol.dispose]() { if (disposed) return; disposed = true; state.refs--; },
+    retain() { if (disposed) throw new Error('disposed source lease'); return observation(entry, state); },
+    [Symbol.dispose]() { if (disposed) return; disposed = true; entry.refs--; state.refs--; },
   };
 }
 
@@ -59,14 +59,15 @@ class ReaderFixture {
     options.signal?.throwIfAborted();
     const mode = this.ctx.mode.getStore() ?? 'full';
     await this.ctx.state.gate?.(mode);
-    let events = this.cache.get(id);
-    if (!events) {
-      events = this.ctx.state.liveEvents ?? [clone(mode === 'presentation' ? previewEvent : fullEvent)];
-      this.cache.set(id, events);
+    let entry = this.cache.get(id);
+    if (!entry) {
+      const events = this.ctx.state.liveEvents ?? [clone(mode === 'presentation' ? previewEvent : fullEvent)];
+      entry = { revision: 'fixture-revision', events, refs: 0 };
+      this.cache.set(id, entry);
       while (this.cache.size > this.cacheCapacity) this.cache.delete(this.cache.keys().next().value);
       this.ctx.state.reads.push(mode);
     }
-    return observation(events, this.ctx.state);
+    return observation(entry, this.ctx.state);
   }
   async inspect(id, getter, signal) {
     const lease = await this.read(id, { signal });
@@ -90,10 +91,21 @@ class QueryFixture {
   async readEvent() { return this.ctx.mode.getStore() ?? 'full'; }
 }
 
-function query(options) {
+function fakeClock() {
+  let now = 0, id = 0;
+  const tasks = new Map();
+  return {
+    setTimeout(callback, delay) { const token = ++id; tasks.set(token, { at: now + delay, callback }); return token; },
+    clearTimeout(token) { tasks.delete(token); },
+    advance(ms) { now += ms; for (const [token, task] of [...tasks]) if (task.at <= now) { tasks.delete(token); task.callback(); } },
+    pending() { return tasks.size; },
+  };
+}
+
+function query(options = {}) {
   assert.equal(typeof createQueryClass, 'function', 'createQueryClass must implement explicit presentation consumers');
   const ctx = context(options);
-  const Adapted = createQueryClass(QueryFixture);
+  const Adapted = createQueryClass(QueryFixture, options.queryOptions ?? {});
   return { ctx, value: new Adapted(ctx, {}), Adapted };
 }
 
@@ -140,7 +152,7 @@ test('presentation and full readers remain independent during concurrent observa
   assert.equal(preview.events[0].data.meta.lines.length, 0);
   assert.deepEqual(full.events[0], fullEvent);
   assert.equal(value._observations, originalReader);
-  assert.deepEqual(originalReader.cache.get('owner')[0], fullEvent);
+  assert.deepEqual(originalReader.cache.get('owner').events[0], fullEvent);
   assert.deepEqual(ctx.state.reads.sort(), ['full', 'presentation']);
   assert.equal(Adapted.Config, QueryFixture.Config); assert.equal(Adapted.inject, QueryFixture.inject);
   preview[Symbol.dispose](); full[Symbol.dispose](); assert.equal(ctx.state.refs, 0);
@@ -229,9 +241,9 @@ test('adapts modern query readers without the legacy inspect method', async () =
     }
     async read(id, options = {}) {
       options.signal?.throwIfAborted();
-      const events = this.cache.get(id) ?? [clone(previewEvent)];
-      this.cache.set(id, events);
-      return observation(events, this.ctx.state);
+      let entry=this.cache.get(id);
+      if(!entry){entry={revision:'modern-r1',events:[clone(previewEvent)],refs:0};this.cache.set(id,entry);}
+      return observation(entry,this.ctx.state);
     }
   }
   class ModernQuery {
@@ -242,10 +254,83 @@ test('adapts modern query readers without the legacy inspect method', async () =
     observeSession(id, options) { return this._observations.read(id, options); }
   }
   const ctx = context();
-  const Adapted = createQueryClass(ModernQuery);
+  const clock=fakeClock();
+  const Adapted = createQueryClass(ModernQuery,{idleMs:10,setTimer:clock.setTimeout,clearTimer:clock.clearTimeout});
   const value = new Adapted(ctx, {});
   assert.equal(await value.inspectSession('owner', session => session.events[0].data.meta.lines.length), 0);
   assert.equal(ctx.state.refs, 0);
+  assert.equal(value.memoryMetrics().presentation.pendingEvictions,1);
+  clock.advance(10);
+  assert.equal(value._observations.cache.size,0);
+});
+
+test('inspection schedules only the reader used by the legacy or modern getter', async () => {
+  for (const legacy of [true,false]) {
+    let instance;
+    class Reader {
+    constructor(ctx, cacheCapacity=1) { Object.assign(this,{ctx,cacheCapacity,cache:new Map()}); instance=this; }
+      async read(id) {
+        const entry={refs:1,revision:'r',events:[{seq:0}]}; this.cache.set(id,entry);
+        return {source:'prepared',header:{id},revision:'r',events:entry.events,[Symbol.dispose](){entry.refs--;}};
+      }
+    }
+    if (legacy) Reader.prototype.inspect=async function(id,fn) {const lease=await this.read(id);try{return fn(lease);}finally{lease[Symbol.dispose]();}};
+    class Base { constructor(ctx){this._observations=new Reader(ctx);} observeSession(id){return this._observations.read(id);} }
+    let fire; const ctx=context(); const Query=createQueryClass(Base,{setTimer:fn=>{fire=fn;return 1;},clearTimer:()=>{fire=undefined;}});
+    const service=new Query(ctx,{});
+    try {
+      await assert.rejects(service.inspectSession('owner',()=>{throw new Error('getter failed');}),/getter failed/);
+      assert.equal(instance.cache.size,1); assert.equal(typeof fire,'function'); fire(); assert.equal(instance.cache.size,0);
+    } finally {ctx.dispose();}
+  }
+});
+
+test('evicts presentation and full prepared caches after the final lease', async () => {
+  const clock = fakeClock();
+  const { ctx, value } = query({queryOptions:{idleMs:10,setTimer:clock.setTimeout,clearTimer:clock.clearTimeout}});
+  const preview = await value.observeSession('owner');
+  const previewRetained = preview.retain();
+  preview[Symbol.dispose]();
+  clock.advance(10);
+  assert.equal(value.memoryMetrics().presentation.entries,1,'retained presentation lease pins its cache entry');
+  previewRetained[Symbol.dispose]();
+  assert.equal(value.memoryMetrics().presentation.pendingEvictions,1);
+  clock.advance(10);
+  assert.equal(value.memoryMetrics().presentation.entries,0);
+
+  const full = await value.observeFullSession('owner');
+  const fullRetained = full.retain();
+  full[Symbol.dispose]();
+  clock.advance(10);
+  assert.equal(value.memoryMetrics().full.entries,1,'retained full lease pins its native cache entry');
+  fullRetained[Symbol.dispose]();
+  clock.advance(10);
+  assert.equal(value.memoryMetrics().full.entries,0);
+  assert.equal(ctx.state.refs,0);
+  ctx.dispose();
+});
+
+test('inspect schedules presentation cache eviction for legacy and modern readers', async () => {
+  for (const legacy of [true, false]) {
+    const clock = fakeClock();
+    let readerInstance;
+    class Reader {
+      constructor(ctx, cacheCapacity=1) { Object.assign(this,{ctx,cacheCapacity,cache:new Map()}); readerInstance=this; }
+      async read(id) {
+        const entry={refs:0,revision:'r1',events:[clone(previewEvent)]}; this.cache.set(id,entry);
+        return observation(entry,this.ctx.state);
+      }
+    }
+    if (legacy) Reader.prototype.inspect=async function(id,getter) { const lease=await this.read(id);try{return getter(lease);}finally{lease[Symbol.dispose]();} };
+    class Base { constructor(ctx){this._observations=new Reader(ctx,1);} observeSession(id){return this._observations.read(id);} }
+    const ctx=context(); const Query=createQueryClass(Base,{idleMs:10,setTimer:clock.setTimeout,clearTimer:clock.clearTimeout});
+    const service=new Query(ctx,{});
+    assert.equal(await service.inspectSession('owner',session=>session.events[0].data.meta.lines.length),0);
+    assert.equal(service.memoryMetrics().presentation.pendingEvictions,1);
+    clock.advance(10);
+    assert.equal(readerInstance.cache.size,0);
+    ctx.dispose();
+  }
 });
 
 test('constructor refuses an incompatible native observation shape', () => {

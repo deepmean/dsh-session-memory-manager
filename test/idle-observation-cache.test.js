@@ -77,7 +77,7 @@ test('evicts an unpinned prepared entry after the idle grace', async () => {
   await f.clock.advance(1);
   assert.equal(f.reader.cache.has('owner'), false);
   assert.deepEqual(f.cache.metrics(), {
-    entries: 0, retainedEvents: 0, activeLeases: 0, pendingEvictions: 0, evictions: 1,
+    entries: 0, retainedEvents: 0, activeLeases: 0, inFlightReads: 0, pendingEvictions: 0, evictions: 1,
   });
 });
 
@@ -134,6 +134,18 @@ test('an incompatible entry shape fails safe without deletion', async () => {
   await f.clock.advance(100);
   assert.equal(f.reader.cache.get('owner'), incompatible);
   assert.equal(f.cache.metrics().evictions, 0);
+});
+
+test('an in-flight read protects the entry and a failed read rearms it', async () => {
+  const f=fixture({idleMs:30}); const lease=f.cache.wrap('owner',f.leaseFor()); lease[Symbol.dispose]();
+  const end=f.cache.beginRead('owner'); await f.clock.advance(30); assert.equal(f.reader.cache.size,1);
+  end(); await f.clock.advance(30); assert.equal(f.reader.cache.size,0);
+});
+
+test('a live observation is passed through without evaluating lazy events', () => {
+  const f=fixture(); const hold=f.leaseFor();
+  const live={source:'live',get events(){throw new Error('unexpected materialization');}};
+  assert.equal(f.cache.wrap('owner',live),live); hold[Symbol.dispose]();
 });
 
 test('clear cancels timers and leaves borrowed leases usable', () => {
