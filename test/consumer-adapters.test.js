@@ -39,12 +39,24 @@ function context({ adapted = true, gate } = {}) {
   return ctx;
 }
 
+class DshSessionFixture {
+  constructor(header,events){this.header=header;this.events=events;}
+  get id(){return this.header.id;}
+  snapshotEvents(){return this.events;}
+}
+function cachedEntry(id, revision, events) {
+  const header={id,version:4,createdAt:1,isSeeded:false};
+  const session=new DshSessionFixture(header,Object.freeze(events));
+  return {persistedEventCount:events.length,persistenceIdentity:Symbol('persistence'),revision,session,events:session.events,refs:0};
+}
+
 function observation(entry, state) {
   state.refs++; entry.refs++;
   let disposed = false;
   return {
-    source: 'prepared', header: { id: 'owner', version: 4, createdAt: 1, isSeeded: false },
-    inheritedEventCount: 0, events: entry.events, cursor: 0, revision: entry.revision,
+    source: 'prepared', header: entry.session.header,
+    inheritedEventCount:0,persistedEventCount:entry.persistedEventCount,
+    events: entry.events, cursor: 0, revision: entry.revision,
     projections: { asOfSeq: 0, values: { title: 'fixture' } },
     retain() { if (disposed) throw new Error('disposed source lease'); return observation(entry, state); },
     [Symbol.dispose]() { if (disposed) return; disposed = true; entry.refs--; state.refs--; },
@@ -62,7 +74,7 @@ class ReaderFixture {
     let entry = this.cache.get(id);
     if (!entry) {
       const events = this.ctx.state.liveEvents ?? [clone(mode === 'presentation' ? previewEvent : fullEvent)];
-      entry = { revision: 'fixture-revision', events, refs: 0 };
+      entry = cachedEntry(id,'fixture-revision',events);
       this.cache.set(id, entry);
       while (this.cache.size > this.cacheCapacity) this.cache.delete(this.cache.keys().next().value);
       this.ctx.state.reads.push(mode);
@@ -242,7 +254,7 @@ test('adapts modern query readers without the legacy inspect method', async () =
     async read(id, options = {}) {
       options.signal?.throwIfAborted();
       let entry=this.cache.get(id);
-      if(!entry){entry={revision:'modern-r1',events:[clone(previewEvent)],refs:0};this.cache.set(id,entry);}
+      if(!entry){entry=cachedEntry(id,'modern-r1',[clone(previewEvent)]);this.cache.set(id,entry);}
       return observation(entry,this.ctx.state);
     }
   }
@@ -270,8 +282,8 @@ test('inspection schedules only the reader used by the legacy or modern getter',
     class Reader {
     constructor(ctx, cacheCapacity=1) { Object.assign(this,{ctx,cacheCapacity,cache:new Map()}); instance=this; }
       async read(id) {
-        const entry={refs:1,revision:'r',events:[{seq:0}]}; this.cache.set(id,entry);
-        return {source:'prepared',header:{id},revision:'r',events:entry.events,[Symbol.dispose](){entry.refs--;}};
+        const entry=cachedEntry(id,'r',[clone(previewEvent)]); this.cache.set(id,entry);
+        return observation(entry,this.ctx.state);
       }
     }
     if (legacy) Reader.prototype.inspect=async function(id,fn) {const lease=await this.read(id);try{return fn(lease);}finally{lease[Symbol.dispose]();}};
@@ -317,7 +329,7 @@ test('inspect schedules presentation cache eviction for legacy and modern reader
     class Reader {
       constructor(ctx, cacheCapacity=1) { Object.assign(this,{ctx,cacheCapacity,cache:new Map()}); readerInstance=this; }
       async read(id) {
-        const entry={refs:0,revision:'r1',events:[clone(previewEvent)]}; this.cache.set(id,entry);
+        const entry=cachedEntry(id,'r1',[clone(previewEvent)]); this.cache.set(id,entry);
         return observation(entry,this.ctx.state);
       }
     }
