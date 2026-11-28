@@ -1,6 +1,6 @@
 # DSH 会话内存管理器
 
-`@local/dsh-session-memory-manager@0.1.0-alpha.4` 是本地试用包，包含 DSH alpha.2 的 PTC 原日志分页、Web 会话内存管理，以及针对 alpha.2 Query/native JSONL 导出的兼容修复。它不会删除、裁剪或外置会话日志，也不会恢复旧的独立查看页。
+`@local/dsh-session-memory-manager@0.1.0-alpha.5` 是本地试用包，包含 DSH alpha.2 的 PTC 原日志分页、Web 会话内存管理，以及 Query prepared-session 和 worker 磁盘索引的空闲回收。它不会删除、裁剪或外置会话日志，也不会恢复旧的独立查看页。
 
 ## 会话内存
 
